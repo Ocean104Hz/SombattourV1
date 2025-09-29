@@ -29,9 +29,9 @@ export default function NavBar({
           {/* right */}
           <div className="flex items-center gap-2">
             {rightSlot}
-            <a href="https://www.425store.com/" className="inline-flex items-center gap-2 px-3 h-9 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white cursor-pointer">
+            <a href="https://www.425store.com/" className=" cursor-pointer">
                 <button
-                className=""
+                className="inline-flex items-center gap-2 px-3 h-9 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white cursor-pointer"
                 title="กลับหน้าหลัก"
                 >
                 <FiHome  />
