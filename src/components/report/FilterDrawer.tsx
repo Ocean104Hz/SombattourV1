@@ -7,6 +7,14 @@ export type DrawerFilters =
   | { mode: "pendingAll" }
   | { mode: "history"; carName?: string; plate?: string; vin?: string };
 
+function todayStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export default function FilterDrawer({
   open, initial, onClose, onSubmit,
 }: { open: boolean; initial: DrawerFilters; onClose: () => void; onSubmit: (f: DrawerFilters) => void; }) {
@@ -14,12 +22,11 @@ export default function FilterDrawer({
 
   const [from, setFrom] = useState(initial.mode === "custom" ? initial.from ?? "" : "");
   const [to, setTo] = useState(initial.mode === "custom" ? initial.to ?? "" : "");
-  const [date, setDate] = useState(initial.mode === "daily" ? initial.date ?? "" : "");
+  const [date, setDate] = useState(initial.mode === "daily" ? initial.date ?? todayStr() : todayStr());
   const [carName, setCarName] = useState(initial.mode === "history" ? initial.carName ?? "" : "");
   const [plate, setPlate] = useState(initial.mode === "history" ? initial.plate ?? "" : "");
   const [vin, setVin] = useState(initial.mode === "history" ? initial.vin ?? "" : "");
 
-  // เปิด/ปิดแต่ละ section
   const [openSection, setOpenSection] = useState<Record<DrawerFilters["mode"], boolean>>({
     custom: active === "custom",
     daily: active === "daily",
@@ -36,8 +43,24 @@ export default function FilterDrawer({
     });
   }, [active]);
 
+  // ซิงก์เมื่อ Drawer เปิดใหม่
+  useEffect(() => {
+    if (!open) return;
+    setActive(initial.mode);
+    setFrom(initial.mode === "custom" ? (initial as any).from ?? "" : "");
+    setTo(initial.mode === "custom" ? (initial as any).to ?? "" : "");
+    setDate(initial.mode === "daily" ? (initial as any).date ?? todayStr() : todayStr());
+    setCarName(initial.mode === "history" ? (initial as any).carName ?? "" : "");
+    setPlate(initial.mode === "history" ? (initial as any).plate ?? "" : "");
+    setVin(initial.mode === "history" ? (initial as any).vin ?? "" : "");
+  }, [open, initial]);
+
   const submit = () => {
-    if (active === "custom") return onSubmit({ mode: "custom", from, to });
+    if (active === "custom") {
+      const _from = from || to || todayStr();
+      const _to   = to   || from || _from;
+      return onSubmit({ mode: "custom", from: _from, to: _to });
+    }
     if (active === "daily") return onSubmit({ mode: "daily", date });
     if (active === "pendingAll") return onSubmit({ mode: "pendingAll" });
     return onSubmit({ mode: "history", carName, plate, vin });
@@ -61,15 +84,16 @@ export default function FilterDrawer({
           <Accordion title="กำหนดเอง" active={active === "custom"} open={openSection.custom}
             onClick={() => { setActive("custom"); setOpenSection(s => ({ ...s, custom: !s.custom })); }}>
             <Label>วันที่</Label>
-            <input type="date" value={from} onChange={(e)=>setFrom(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <input type="date" value={from} max={todayStr()} onChange={(e)=>setFrom(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
             <Label className="mt-3">ถึงวันที่</Label>
-            <input type="date" value={to} onChange={(e)=>setTo(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <input type="date" value={to} max={todayStr()} onChange={(e)=>setTo(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <p className="text-xs text-gray-500 mt-1">เลือก 1 หรือ 2 ช่องก็ได้ (เว้นว่างช่องใดช่องหนึ่ง ระบบจะใช้วันเดียวกัน)</p>
           </Accordion>
 
           <Accordion title="งานประจำวัน" active={active === "daily"} open={openSection.daily}
             onClick={() => { setActive("daily"); setOpenSection(s => ({ ...s, daily: !s.daily })); }}>
             <Label>วันที่ (ค.ศ.)</Label>
-            <input type="date" value={date} onChange={(e)=>setDate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <input type="date" value={date} max={todayStr()} onChange={(e)=>setDate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
           </Accordion>
 
           <Accordion title="งานค้างทั้งหมด" active={active === "pendingAll"} open={openSection.pendingAll}
