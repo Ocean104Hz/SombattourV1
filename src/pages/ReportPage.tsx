@@ -1,3 +1,4 @@
+// src/pages/ReportPage.tsx
 import { useEffect, useMemo, useState } from "react";
 import type { RepairRow, PartRow, ExpenseRow } from "@/types/repair";
 import { parseDate, toDateTime, isSameDay } from "@/utils/datetime";
@@ -10,18 +11,44 @@ import LoadingOverlay from "@/components/common/LoadingOverlay";
 import SkeletonCards from "@/components/report/SkeletonCards";
 import NavBar from "@/layouts/NavBar";
 
-const API_URL =
+/* ========== Endpoints ========== */
+const REPAIR_API =
   (import.meta as any).env?.VITE_REPAIR_API ||
   "https://425store.com/api/list_repair.php";
+const PARTS_DAY_API =
+  (import.meta as any).env?.VITE_PARTS_DAY ||
+  "https://425store.com/api/parts_day.php";
+const EXPENSES_DAY_API =
+  (import.meta as any).env?.VITE_EXPENSES_DAY ||
+  "https://425store.com/api/expenses_day.php";
 
-/* ---------- helpers ---------- */
+/* ========== Settings ========== */
+const PENDING_LOOKBACK_DAYS = 365; // ย้อนหลังสูงสุดกี่วันสำหรับ “งานค้างทั้งหมด”
+const PARALLEL_CHUNK = 5;          // ยิงโหลดพร้อมกันครั้งละกี่วัน
+
+/* ========== Safe fetch JSON ========== */
+async function fetchJSON(url: string) {
+  const res = await fetch(url, { credentials: "omit" });
+  const ct = res.headers.get("content-type") || "";
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}\n${text.slice(0, 200)}`);
+  if (!ct.includes("application/json")) {
+    throw new Error(`Not JSON from ${url}\nPreview: ${text.slice(0, 200)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`JSON parse error from ${url}\nPreview: ${text.slice(0, 200)}`);
+  }
+}
+
+/* ========== Helpers ========== */
 function fmtDate(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 }
-
 function enumerateDates(from: string, to: string) {
   const out: string[] = [];
   const s = new Date(from + "T00:00:00");
@@ -36,6 +63,42 @@ function enumerateDates(from: string, to: string) {
   }
   return out;
 }
+function clean(v: any) {
+  return String(v ?? "").trim();
+}
+
+/* ========== Pending helpers (ย้ายออกมานอกคอมโพเนนต์) ========== */
+const ZERO_DATES = new Set(["", "0000-00-00", "0000-00-00 00:00:00"]);
+function isPending(row: any) {
+  // ใช้ชื่อหลัก r_dt_close; ถ้าบาง record มากับชื่อเก่า เผื่อไว้ด้วย
+  const rawClose = String(row.r_dt_close ?? row.r_close_dt ?? "").trim();
+  const notClosedByDate = ZERO_DATES.has(rawClose);
+  const notClosedByFlag = String(row.r_close ?? "").trim() === "0";
+  return notClosedByDate || notClosedByFlag;
+}
+
+/* ========== Mappers for modal tables ========== */
+function mapPartFromDB(p: any): PartRow {
+  return {
+    id: String(p.up_id),
+    createdAt: p.up_dt_rec,
+    partId: String(p.up_parts_id ?? ""),
+    partCode: String(p.up_parts_num ?? ""),
+    partName: String(p.up_parts_name ?? ""),
+    lotId: String(p.up_lot_id ?? ""),
+    qty: Number(p.up_quantity ?? 0),
+    unit: String(p.up_unit ?? ""),
+  };
+}
+function mapExpenseFromDB(x: any): ExpenseRow {
+  return {
+    id: String(x.oc_id),
+    createdAt: x.oc_dt_rec,
+    name: String(x.oc_listname ?? ""),
+    qty: Number(x.oc_quantity ?? 0),
+    unit: String(x.oc_unit ?? ""),
+  };
+}
 
 export default function ReportPage() {
   const [items, setItems] = useState<RepairRow[]>([]);
@@ -46,33 +109,45 @@ export default function ReportPage() {
   const [filters, setFilters] = useState<DrawerFilters>({ mode: "pendingAll" });
   const [q, setQ] = useState("");
 
-  // โหมดวันเดียว
+  // วันเดียว / วันที่จากเซิร์ฟเวอร์
   const [dateStr, setDateStr] = useState<string>("today");
   const [serverDate, setServerDate] = useState<string | null>(null);
 
-  // โหมดช่วงวัน
+  // โหมดช่วงวัน (ถ้าตั้งค่า แสดงเป็นหัวข้อช่วงและหยุด useEffect วันเดียว)
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
 
-  // modal
+  // ใบงานที่ถูกเลือก
   const [selected, setSelected] = useState<RepairRow | null>(null);
-  const [parts] = useState<PartRow[]>([]);
-  const [expenses] = useState<ExpenseRow[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<number | null>(null);
 
-  /** โหลดวันเดียวจาก API */
+  // เก็บอะไหล่/ค่าใช้จ่ายของวัน/ช่วง แล้วค่อยกรองเมื่อต้องการ
+  const [allParts, setAllParts] = useState<any[]>([]);
+  const [allExps, setAllExps] = useState<any[]>([]);
+
+  /* ---------- loaders (one day) ---------- */
   async function loadOneDay(dayStr: string) {
-    const url = `${API_URL}?date=${encodeURIComponent(dayStr)}&limit=1000`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
+    const url = `${REPAIR_API}?date=${encodeURIComponent(dayStr)}&limit=1000`;
+    const json = await fetchJSON(url);
     const rows = (json.rows ?? json.data ?? []) as RepairRow[];
     return { rows, normalizedDate: json?.date as string | undefined };
   }
+  async function loadPartsOneDay(dayStr: string) {
+    const url = `${PARTS_DAY_API}?date=${encodeURIComponent(dayStr)}&limit=10000`;
+    const json = await fetchJSON(url);
+    return (json.rows ?? []) as any[];
+  }
+  async function loadExpsOneDay(dayStr: string) {
+    const url = `${EXPENSES_DAY_API}?date=${encodeURIComponent(dayStr)}&limit=10000`;
+    const json = await fetchJSON(url);
+    return (json.rows ?? []) as any[];
+  }
 
-  /** โหลดช่วงวันแบบขนานทีละก้อน (เร็วขึ้น) */
+  /* ---------- loaders (range) ---------- */
   async function loadRange(from: string, to: string) {
     const days = enumerateDates(from, to);
     if (!days.length) {
       setItems([]); setServerDate(null); setRangeLabel(null);
+      setAllParts([]); setAllExps([]);
       return;
     }
     if (days.length > 31) throw new Error("ช่วงวันยาวเกิน 31 วัน กรุณาแบ่งค้นหา");
@@ -80,13 +155,24 @@ export default function ReportPage() {
     setLoading(true); setErr(null);
     try {
       const all: RepairRow[] = [];
-      const chunk = 5; // ยิงพร้อมกันครั้งละ 5 วัน
-      for (let i = 0; i < days.length; i += chunk) {
-        const slice = days.slice(i, i + chunk);
-        const results = await Promise.all(slice.map(d => loadOneDay(d)));
-        results.forEach(r => all.push(...r.rows));
+      const pAll: any[] = [];
+      const eAll: any[] = [];
+
+      for (let i = 0; i < days.length; i += PARALLEL_CHUNK) {
+        const slice = days.slice(i, i + PARALLEL_CHUNK);
+        const [repairResList, partsList, expsList] = await Promise.all([
+          Promise.all(slice.map(d => loadOneDay(d))),
+          Promise.all(slice.map(d => loadPartsOneDay(d))),
+          Promise.all(slice.map(d => loadExpsOneDay(d))),
+        ]);
+        repairResList.forEach(r => all.push(...r.rows));
+        partsList.forEach(arr => pAll.push(...arr));
+        expsList.forEach(arr => eAll.push(...arr));
       }
+
       setItems(all);
+      setAllParts(pAll);
+      setAllExps(eAll);
       setServerDate(null);
       setRangeLabel(
         `${new Date(days[0] + "T00:00:00").toLocaleDateString("th-TH")} – ${new Date(
@@ -95,13 +181,61 @@ export default function ReportPage() {
       );
     } catch (e: any) {
       setItems([]); setRangeLabel(null);
+      setAllParts([]); setAllExps([]);
       setErr(e?.message || "โหลดช่วงวันล้มเหลว");
     } finally {
       setLoading(false);
     }
   }
 
-  // โหลดวันเดียว (หยุดทำงานเมื่ออยู่ในโหมดช่วงวัน)
+  /* ---------- loader (pending all over long range) ---------- */
+  async function loadPendingAll(lookbackDays = PENDING_LOOKBACK_DAYS) {
+    const today = new Date();
+    const from = new Date(); from.setDate(today.getDate() - (lookbackDays - 1));
+    const fromStr = fmtDate(from);
+    const toStr   = fmtDate(today);
+
+    const days = enumerateDates(fromStr, toStr);
+    setLoading(true); setErr(null);
+    setRangeLabel(null);
+
+    try {
+      const all: RepairRow[] = [];
+      const pAll: any[] = [];
+      const eAll: any[] = [];
+
+      for (let i = 0; i < days.length; i += PARALLEL_CHUNK) {
+        const slice = days.slice(i, i + PARALLEL_CHUNK);
+        const [repairResList, partsList, expsList] = await Promise.all([
+          Promise.all(slice.map(d => loadOneDay(d))),
+          Promise.all(slice.map(d => loadPartsOneDay(d))),
+          Promise.all(slice.map(d => loadExpsOneDay(d))),
+        ]);
+        // รวมก่อน แล้วกรองใน useMemo ด้วย isPending()
+        repairResList.forEach(r => all.push(...r.rows));
+        partsList.forEach(arr => pAll.push(...arr));
+        expsList.forEach(arr => eAll.push(...arr));
+      }
+
+      setItems(all);
+      setAllParts(pAll);
+      setAllExps(eAll);
+      setServerDate(null);
+      setRangeLabel(
+        `งานค้างทั้งหมด • ${new Date(fromStr + "T00:00:00").toLocaleDateString("th-TH")} – ${new Date(
+          toStr + "T00:00:00"
+        ).toLocaleDateString("th-TH")}`
+      );
+    } catch (e: any) {
+      setItems([]); setAllParts([]); setAllExps([]);
+      setRangeLabel(null);
+      setErr(e?.message || "โหลดงานค้างทั้งหมดล้มเหลว");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /* ---------- Effect: load single day (disabled when rangeLabel exists) ---------- */
   useEffect(() => {
     let alive = true;
     if (rangeLabel) return;
@@ -109,17 +243,23 @@ export default function ReportPage() {
     (async () => {
       try {
         setLoading(true); setErr(null);
-        const { rows, normalizedDate } = await loadOneDay(dateStr);
+        const [repairRes, partsRes, expsRes] = await Promise.all([
+          loadOneDay(dateStr),
+          loadPartsOneDay(dateStr),
+          loadExpsOneDay(dateStr),
+        ]);
         if (!alive) return;
-        setItems(rows);
-        if (normalizedDate) {
-          setServerDate(normalizedDate);
-          if (dateStr === "today" || dateStr === "latest") setDateStr(normalizedDate);
+        setItems(repairRes.rows);
+        setAllParts(partsRes);
+        setAllExps(expsRes);
+        if (repairRes.normalizedDate) {
+          setServerDate(repairRes.normalizedDate);
+          if (dateStr === "today" || dateStr === "latest") setDateStr(repairRes.normalizedDate);
         }
       } catch (e: any) {
         if (!alive) return;
         setErr(e?.message || "โหลดข้อมูลล้มเหลว");
-        setItems([]);
+        setItems([]); setAllParts([]); setAllExps([]);
       } finally {
         if (alive) setLoading(false);
       }
@@ -128,10 +268,11 @@ export default function ReportPage() {
     return () => { alive = false; };
   }, [dateStr, rangeLabel]);
 
-  // กรองฝั่ง client
+  /* ---------- Client filter ---------- */
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
     return items.filter((row) => {
+      // คีย์เวิร์ด
       if (key) {
         const hay = [
           row.r_job_num, row.r_v_plate, row.r_v_name,
@@ -140,21 +281,32 @@ export default function ReportPage() {
         ].map(v => (v ? String(v).toLowerCase() : "")).join(" ");
         if (!hay.includes(key)) return false;
       }
+
+      // โหมดฟิลเตอร์
+      if (filters.mode === "pendingAll") {
+        return isPending(row);             // ✅ โชว์เฉพาะงานค้าง
+      }
       if (filters.mode === "custom") {
-        return true; // โหลดรวมช่วงวันมาแล้ว
-      } else if (filters.mode === "daily" && filters.date) {
+        return true;                       // โหลดช่วงวันแล้ว ค่อยกรองด้วยคีย์เวิร์ด
+      }
+      if (filters.mode === "daily" && filters.date) {
         const d = parseDate(row.r_dt_rec); if (!d) return false;
-        if (!isSameDay(d, new Date(`${filters.date}T00:00:00`))) return false;
-      } else if (filters.mode === "history") {
-        const ok1 = filters.carName ? (row.r_v_name || row.r_v_plate || "").toLowerCase().includes(filters.carName.toLowerCase()) : true;
-        const ok2 = filters.plate ? (row.r_v_plate || "").toLowerCase().includes(filters.plate.toLowerCase()) : true;
-        const ok3 = filters.vin ? String(row.r_job_num || "").toLowerCase().includes(filters.vin.toLowerCase()) : true;
-        if (!(ok1 && ok2 && ok3)) return false;
+        return isSameDay(d, new Date(`${filters.date}T00:00:00`));
+      }
+      if (filters.mode === "history") {
+        const ok1 = filters.carName ? (row.r_v_name || row.r_v_plate || "")
+          .toLowerCase().includes(filters.carName.toLowerCase()) : true;
+        const ok2 = filters.plate ? (row.r_v_plate || "")
+          .toLowerCase().includes(filters.plate.toLowerCase()) : true;
+        const ok3 = filters.vin ? String(row.r_v_chassis || row.r_job_num || "")
+          .toLowerCase().includes(filters.vin.toLowerCase()) : true;
+        return ok1 && ok2 && ok3;
       }
       return true;
     });
   }, [items, q, filters]);
 
+  /* ---------- Title date ---------- */
   const titleDate = useMemo(() => {
     if (rangeLabel) return rangeLabel;
     const dStr = serverDate || items[0]?.r_dt_rec || fmtDate(new Date());
@@ -165,16 +317,37 @@ export default function ReportPage() {
     return d.toLocaleDateString("th-TH", { year: "numeric", month: "2-digit", day: "2-digit" });
   }, [items, serverDate, rangeLabel]);
 
+  /* ---------- Rows in modal ---------- */
+  const partsForSelected = useMemo<PartRow[]>(() => {
+    if (!selected) return [];
+    const id = clean(selected.r_id);
+    const num = clean(selected.r_job_num);
+    return allParts
+      .filter((p) => clean(p.up_job_id) === id || clean(p.up_job_num) === num)
+      .map(mapPartFromDB);
+  }, [selected, allParts]);
+
+  const expsForSelected = useMemo<ExpenseRow[]>(() => {
+    if (!selected) return [];
+    const id = clean(selected.r_id);
+    const num = clean(selected.r_job_num);
+    return allExps
+      .filter((x) =>
+        clean(x.oc_job_id) === id ||
+        clean(x.oc_ref_id) === id ||
+        clean(x.oc_job_num) === num
+      )
+      .map(mapExpenseFromDB);
+  }, [selected, allExps]);
+
+  /* ---------- Render ---------- */
   return (
     <div className="min-h-screen bg-gray-900 text-white relative">
-      {/* Navbar (แทนหัวข้อเดิม + ปุ่มเมนู) */}
       <NavBar
         onOpenMenu={() => setDrawerOpen(true)}
         subtitle={<>{rangeLabel ? "ช่วงวันที่ " : "งานประจำวันที่ "} {titleDate}</>}
-        
       />
 
-      {/* Drawer ฟิลเตอร์ */}
       <FilterDrawer
         open={drawerOpen}
         initial={filters}
@@ -182,6 +355,7 @@ export default function ReportPage() {
         onSubmit={async (f) => {
           setFilters(f);
           setErr(null);
+
           if (f.mode === "custom") {
             const from = f.from || f.to || fmtDate(new Date());
             const to   = f.to   || f.from || from;
@@ -189,22 +363,29 @@ export default function ReportPage() {
             await loadRange(from, to);
             return;
           }
+
           setRangeLabel(null);
-          if (f.mode === "daily" && f.date) return setDateStr(f.date);
-          if (f.mode === "pendingAll")      return setDateStr("today");
+
+          if (f.mode === "daily" && f.date) {
+            setDateStr(f.date);
+            return;
+          }
+
+          if (f.mode === "pendingAll") {
+            await loadPendingAll(); // ← โหลดย้อนหลังทั้งช่วง แล้วกรองใน filtered
+            return;
+          }
+
           // history = กรองในหน้า
         }}
       />
 
       {err && <p className="text-red-300 text-center mt-3">{err}</p>}
 
-      {/* แถบควบคุมวัน (เฉพาะโหมดวันเดียว) */}
-
       <div className="px-4 mt-3">
         <SearchBar value={q} onChange={setQ} count={filtered.length} loading={loading} />
       </div>
 
-      {/* รายการ / สเกเลตัน */}
       {loading ? (
         <SkeletonCards count={9} />
       ) : (
@@ -218,7 +399,7 @@ export default function ReportPage() {
                 order={idx + 1}
                 row={item}
                 toDateTime={toDateTime}
-                onOpen={() => setSelected(item)}
+                onOpen={() => { setSelected(item); setSelectedOrder(idx + 1); }}
               />
             ))
           )}
@@ -228,12 +409,12 @@ export default function ReportPage() {
       <DetailsModal
         open={!!selected}
         row={selected}
-        parts={parts}
-        expenses={expenses}
-        onClose={() => setSelected(null)}
+        // order={selectedOrder ?? undefined}
+        parts={partsForSelected}
+        expenses={expsForSelected}
+        onClose={() => { setSelected(null); setSelectedOrder(null); }}
       />
 
-      {/* คลุมทั้งหน้าระหว่างโหลด */}
       <LoadingOverlay
         show={loading}
         label={rangeLabel ? "กำลังรวมข้อมูลช่วงวันที่..." : "กำลังโหลดข้อมูล..."}

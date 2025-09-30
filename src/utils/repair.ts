@@ -1,0 +1,36 @@
+// src/utils/repair.ts
+import type { RepairRow } from "@/types/repair";
+
+// ค่าที่ถือว่า "ยังไม่เสร็จ"
+const NOT_FINISHED_RE = /^(|0000-00-00(?: 00:00:00)?|working\.\.\.|-)\s*$/i;
+
+export function normalize(v?: string | number | null) {
+  return String(v ?? "").trim();
+}
+
+/** ใช้ r_close_dt เพียว ๆ ในการตัดสิน "ปิดงานแล้วหรือยัง" */
+export function isClosedByCloseDt(row: RepairRow) {
+  const raw = normalize((row as any).r_close_dt);
+  if (!raw || NOT_FINISHED_RE.test(raw)) return false; // ยังไม่เสร็จ
+  const d = new Date(raw);
+  return !isNaN(d.getTime());                           // เป็นวันเวลาจริง = เสร็จแล้ว
+}
+
+/** คืนข้อความวันเวลาปิดเป็นภาษาไทย; ถ้ายังไม่เสร็จ -> "Working..." */
+export function closeTextTH(row: RepairRow) {
+  const raw = normalize((row as any).r_close_dt);
+  if (!raw || NOT_FINISHED_RE.test(raw)) return "Working...";
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return raw;
+  return `${d.toLocaleDateString("th-TH")} ${d.toLocaleTimeString("th-TH", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })}`;
+}
+
+/** กันค่า zero-date/ค่าว่างที่ชอบโผล่มาในฟิลด์ string */
+export function cleanZeroLike(v?: string | number | null) {
+  const s = normalize(v);
+  return /^(|0000-00-00(?: 00:00:00)?)$/.test(s) ? "" : s;
+}

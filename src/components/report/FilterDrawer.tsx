@@ -96,9 +96,26 @@ export default function FilterDrawer({
             <input type="date" value={date} max={todayStr()} onChange={(e)=>setDate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
           </Accordion>
 
-          <Accordion title="งานค้างทั้งหมด" active={active === "pendingAll"} open={openSection.pendingAll}
-            onClick={() => { setActive("pendingAll"); setOpenSection(s => ({ ...s, pendingAll: !s.pendingAll })); }}>
-            <p className="text-sm text-gray-600">ไม่มีตัวเลือกเพิ่มเติม</p>
+          <Accordion
+            title="งานค้างทั้งหมด"
+            active={active === "pendingAll"}
+            open={openSection.pendingAll}
+            onClick={() => {
+              setActive("pendingAll");
+              setOpenSection((s) => ({ ...s, pendingAll: !s.pendingAll }));
+            }}
+          >
+            <div className="flex flex-col items-start gap-2">
+              <button
+                onClick={() => {
+                  onSubmit({ mode: "pendingAll" });
+                  onClose();
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-90"
+              >
+                <FiSearch /> ค้นหางานค้างทั้งหมด
+              </button>
+            </div>
           </Accordion>
 
           <Accordion title="ประวัติแจ้งซ่อมรายคัน" active={active === "history"} open={openSection.history}
