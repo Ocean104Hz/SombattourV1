@@ -118,7 +118,7 @@ export default function ReportPage() {
 
   // ใบงานที่ถูกเลือก
   const [selected, setSelected] = useState<RepairRow | null>(null);
-  const [selectedOrder, setSelectedOrder] = useState<number | null>(null);
+  // const [selectedOrder, setSelectedOrder] = useState<number | null>(null);
 
   // เก็บอะไหล่/ค่าใช้จ่ายของวัน/ช่วง แล้วค่อยกรองเมื่อต้องการ
   const [allParts, setAllParts] = useState<any[]>([]);
@@ -399,7 +399,7 @@ export default function ReportPage() {
                 order={idx + 1}
                 row={item}
                 toDateTime={toDateTime}
-                onOpen={() => { setSelected(item); setSelectedOrder(idx + 1); }}
+                onOpen={() => { setSelected(item); }}
               />
             ))
           )}
@@ -412,7 +412,7 @@ export default function ReportPage() {
         // order={selectedOrder ?? undefined}
         parts={partsForSelected}
         expenses={expsForSelected}
-        onClose={() => { setSelected(null); setSelectedOrder(null); }}
+        onClose={() => { setSelected(null); }}
       />
 
       <LoadingOverlay
