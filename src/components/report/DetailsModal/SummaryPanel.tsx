@@ -116,13 +116,14 @@ function Row({
   multiline?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[120px_1fr] gap-2">
-      <div className="font-semibold text-gray-800">{label} :</div>
+    <div className="grid grid-cols-[96px_1fr] sm:grid-cols-[120px_1fr] gap-2 items-start">
+      <div className="font-semibold text-gray-800 whitespace-nowrap">{label} :</div>
       <div
         className={
           multiline
             ? "whitespace-pre-wrap break-words"
-            : "whitespace-nowrap overflow-hidden text-ellipsis"
+            // มือถือ: ตัดบรรทัดได้ (wrap) / จอใหญ่: แสดงบรรทัดเดียวพร้อม …
+            : "whitespace-normal break-words sm:whitespace-nowrap sm:overflow-hidden sm:text-ellipsis"
         }
         title={value}
       >
@@ -131,3 +132,4 @@ function Row({
     </div>
   );
 }
+

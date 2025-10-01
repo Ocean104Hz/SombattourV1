@@ -24,7 +24,7 @@ export default function DetailsModal({
   if (!open || !row) return null;
 
   return (
-    <div className="fixed inset-0 z-[999] flex items-center justify-center">
+    <div className="fixed inset-0 z-[999] flex items-center justify-center mt-10">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="relative bg-white text-gray-900 w-[92vw] max-w-6xl h-[88vh] rounded-3xl shadow-2xl grid grid-cols-1 md:grid-cols-2 overflow-hidden">
         <button
