@@ -15,8 +15,8 @@ export default function RepairCard({ order, row, toDateTime, onOpen }: Props) {
 
   // โชว์ทะเบียนก่อน ถ้าไม่มีค่อย fallback เป็นชื่อรถ
   const vehicle =
-    String(row.r_v_plate ?? "").trim() ||
     String(row.r_v_name ?? "").trim() ||
+    String(row.r_v_plate ?? "").trim() ||
     "-";
 
   return (
@@ -35,10 +35,10 @@ export default function RepairCard({ order, row, toDateTime, onOpen }: Props) {
           <span>วันเวลาที่บันทึก : </span>{dt.date} {dt.time}
         </p>
         <p className="text-md break-words">
-          <span className="">หมายเลขรถ : </span><span className="text-2xl">{vehicle}</span>
+          <span className="">หมายเลขรถ : </span><span className="text-2xl font-bold">{vehicle}</span>
         </p>
         <p className="text-md break-words ">
-          <span className="">รายการซ่อม : </span><span className="text-blue-600">{fmt(row.r_repair_list)}</span>
+          <span className="">รายการซ่อม : </span><span className="text-blue-600 font-bold">{fmt(row.r_repair_list)}</span>
         </p>
         <p className="text-md break-words">
           <span>ไมล์ : </span>{fmt(row.r_mile)}
