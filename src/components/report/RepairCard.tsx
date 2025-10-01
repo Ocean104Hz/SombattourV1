@@ -22,8 +22,8 @@ export default function RepairCard({ order, row, toDateTime, onOpen }: Props) {
   return (
     <div className="bg-white text-gray-900 rounded-xl shadow w-auto max-w-4xl">
       <div className="bg-sky-300 text-gray-800 rounded-t-xl px-4">
-        <p className="text-2xl font-bold whitespace-nowrap">
-          <span className="font-bold">ลำดับ: </span>{order}
+        <p className="whitespace-nowrap">
+          <span className="">ลำดับ: </span>{order}
         </p>
       </div>
 
@@ -34,11 +34,11 @@ export default function RepairCard({ order, row, toDateTime, onOpen }: Props) {
         <p className="text-md break-words">
           <span>วันเวลาที่บันทึก : </span>{dt.date} {dt.time}
         </p>
-        <p className="text-md break-words font-bold">
-          <span className="font-bold">หมายเลขรถ : </span>{vehicle}
+        <p className="text-md break-words">
+          <span className="">หมายเลขรถ : </span><span className="text-2xl">{vehicle}</span>
         </p>
-        <p className="text-md break-words font-bold">
-          <span className="font-bold">รายการซ่อม : </span>{fmt(row.r_repair_list)}
+        <p className="text-md break-words ">
+          <span className="">รายการซ่อม : </span><span className="text-blue-600">{fmt(row.r_repair_list)}</span>
         </p>
         <p className="text-md break-words">
           <span>ไมล์ : </span>{fmt(row.r_mile)}
