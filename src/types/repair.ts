@@ -8,6 +8,7 @@ export type RepairRow = {
   // วัน-เวลาเปิด/ปิดงาน
   r_dt_rec?: string;            // เวลาเปิด/บันทึกงาน (ISO/string)
   r_dt_close?: string;          // เวลา "ปิดงาน" (ถ้ามี)
+  r_close_dt?: string;
 
   // รถ/ทะเบียน/ตัวถัง ฯลฯ
   r_v_plate?: string;           // ทะเบียนรถ (เช่น 14-1854กทม)

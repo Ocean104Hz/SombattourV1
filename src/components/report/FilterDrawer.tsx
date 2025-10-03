@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { FiChevronDown, FiSearch, FiX } from "react-icons/fi";
+import VehiclePickerModal from "@/components/vehicle/VehiclePickerModal";
 
 export type DrawerFilters =
   | { mode: "custom"; from?: string; to?: string }
-  | { mode: "daily"; date?: string }
+  | {  mode: "daily"; date?: string; technician?: string }
   | { mode: "pendingAll" }
   | { mode: "history"; carName?: string; plate?: string; vin?: string };
 
@@ -26,6 +27,11 @@ export default function FilterDrawer({
   const [carName, setCarName] = useState(initial.mode === "history" ? initial.carName ?? "" : "");
   const [plate, setPlate] = useState(initial.mode === "history" ? initial.plate ?? "" : "");
   const [vin, setVin] = useState(initial.mode === "history" ? initial.vin ?? "" : "");
+  const [technician, setTechnician] = useState(
+    initial.mode === "daily" ? (initial as any).technician ?? "" : ""
+  );
+
+  const [vehicleModalOpen, setVehicleModalOpen] = useState(false);
 
   const [openSection, setOpenSection] = useState<Record<DrawerFilters["mode"], boolean>>({
     custom: active === "custom",
@@ -50,6 +56,7 @@ export default function FilterDrawer({
     setFrom(initial.mode === "custom" ? (initial as any).from ?? "" : "");
     setTo(initial.mode === "custom" ? (initial as any).to ?? "" : "");
     setDate(initial.mode === "daily" ? (initial as any).date ?? todayStr() : todayStr());
+    setTechnician(initial.mode === "daily" ? (initial as any).technician ?? "" : "");
     setCarName(initial.mode === "history" ? (initial as any).carName ?? "" : "");
     setPlate(initial.mode === "history" ? (initial as any).plate ?? "" : "");
     setVin(initial.mode === "history" ? (initial as any).vin ?? "" : "");
@@ -61,9 +68,30 @@ export default function FilterDrawer({
       const _to   = to   || from || _from;
       return onSubmit({ mode: "custom", from: _from, to: _to });
     }
-    if (active === "daily") return onSubmit({ mode: "daily", date });
+    if (active === "daily") {
+      return onSubmit({ mode: "daily", date, technician }); // ✅ ส่งชื่อช่างไปด้วย
+    }
     if (active === "pendingAll") return onSubmit({ mode: "pendingAll" });
     return onSubmit({ mode: "history", carName, plate, vin });
+  };
+
+  // ช่องแสดงผลแบบอ่านอย่างเดียว (คลิกเพื่อเปิดมอดอล)
+  const ReadonlyBox = ({ value, onClick }: { value: string; onClick: () => void }) => (
+    <div
+      onClick={onClick}
+      className="w-full px-3 py-2 rounded-lg bg-slate-100 cursor-pointer select-none"
+      title="คลิกเพื่อเลือกจากรายการรถ"
+    >
+      {value?.trim() ? value : <span className="text-gray-400">คลิกเพื่อเลือก</span>}
+    </div>
+  );
+
+  // รับค่าจากมอดอลรถ (ดับเบิลคลิกแถว)
+  const handlePickVehicle = (v: { v_name?: string; v_plate?: string; v_chassis?: string }) => {
+    setCarName(v.v_name ?? "");
+    setPlate(v.v_plate ?? "");
+    setVin(v.v_chassis ?? "");
+    setVehicleModalOpen(false);
   };
 
   return (
@@ -94,9 +122,17 @@ export default function FilterDrawer({
             onClick={() => { setActive("daily"); setOpenSection(s => ({ ...s, daily: !s.daily })); }}>
             <Label>วันที่ (ค.ศ.)</Label>
             <input type="date" value={date} max={todayStr()} onChange={(e)=>setDate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <Label className="mt-3">ช่างผู้รับผิดชอบ</Label>
+            <input
+              value={technician}
+              onChange={(e)=>setTechnician(e.target.value)}
+              placeholder="เช่น ช่างนุ้ย"
+              className="w-full px-3 py-2 rounded-lg bg-slate-100"
+            />
+            <p className="text-xs text-gray-500 mt-1">ระบบจะกรองจาก “วันที่” และ “ชื่อช่าง” (ไม่ต้องพิมพ์เต็มคำก็ได้)</p>
           </Accordion>
 
-          <Accordion
+          {/* <Accordion ระบบค้าหางานค้าง
             title="งานค้างทั้งหมด"
             active={active === "pendingAll"}
             open={openSection.pendingAll}
@@ -116,16 +152,33 @@ export default function FilterDrawer({
                 <FiSearch /> ค้นหางานค้างทั้งหมด
               </button>
             </div>
-          </Accordion>
+          </Accordion> */}
 
-          <Accordion title="ประวัติแจ้งซ่อมรายคัน" active={active === "history"} open={openSection.history}
-            onClick={() => { setActive("history"); setOpenSection(s => ({ ...s, history: !s.history })); }}>
+          {/* แก้ส่วนนี้ให้เลือกจากมอดอลรถ */}
+          <Accordion
+            title="ประวัติแจ้งซ่อมรายคัน"
+            active={active === "history"}
+            open={openSection.history}
+            onClick={() => { setActive("history"); setOpenSection(s => ({ ...s, history: !s.history })); }}
+          >
             <Label>หมายเลขรถ / ชื่อรถ</Label>
-            <input value={carName} onChange={(e)=>setCarName(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <ReadonlyBox value={carName} onClick={() => setVehicleModalOpen(true)} />
+
             <Label className="mt-3">เลขทะเบียน</Label>
-            <input value={plate} onChange={(e)=>setPlate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <ReadonlyBox value={plate} onClick={() => setVehicleModalOpen(true)} />
+
             <Label className="mt-3">เลขตัวถัง</Label>
-            <input value={vin} onChange={(e)=>setVin(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-100" />
+            <ReadonlyBox value={vin} onClick={() => setVehicleModalOpen(true)} />
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => { setCarName(""); setPlate(""); setVin(""); }}
+                className="text-sm text-gray-600 underline"
+              >
+                ล้างค่า
+              </button>
+            </div>
           </Accordion>
 
           <div className="pt-4">
@@ -136,6 +189,17 @@ export default function FilterDrawer({
           </div>
         </div>
       </aside>
+
+      {/* มอดอลเลือกรถ — ดับเบิลคลิกแถวเพื่อเลือก */}
+      <VehiclePickerModal
+        open={vehicleModalOpen}
+        onClose={() => setVehicleModalOpen(false)}
+        onPick={(v) => handlePickVehicle({
+          v_name: (v as any).v_name,
+          v_plate: (v as any).v_plate,
+          v_chassis: (v as any).v_chassis,
+        })}
+      />
     </>
   );
 }

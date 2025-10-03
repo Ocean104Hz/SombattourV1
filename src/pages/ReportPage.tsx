@@ -11,30 +11,30 @@ import LoadingOverlay from "@/components/common/LoadingOverlay";
 import SkeletonCards from "@/components/report/SkeletonCards";
 import NavBar from "@/layouts/NavBar";
 
-/* ========== Endpoints ========== */
-const REPAIR_API =
-  (import.meta as any).env?.VITE_REPAIR_API ||
-  "https://425store.com/api/list_repair.php";
-const PARTS_DAY_API =
-  (import.meta as any).env?.VITE_PARTS_DAY ||
-  "https://425store.com/api/parts_day.php";
-const EXPENSES_DAY_API =
-  (import.meta as any).env?.VITE_EXPENSES_DAY ||
-  "https://425store.com/api/expenses_day.php";
+/* ============ Endpoint (.env อาจเป็น '.../api' หรือ '.../api/export_all.php') ============ */
+const RAW = (((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || "").trim();
+const API_TOKEN = (import.meta as any).env?.VITE_API_TOKEN as string | undefined;
 
-/* ========== Settings ========== */
-const PENDING_LOOKBACK_DAYS = 365; // ย้อนหลังสูงสุดกี่วันสำหรับ “งานค้างทั้งหมด”
-const PARALLEL_CHUNK = 5;          // ยิงโหลดพร้อมกันครั้งละกี่วัน
+// ถ้า VITE_API_BASE_URL เป็นไฟล์ .php ใช้ตรง ๆ; ถ้าเป็นโฟลเดอร์ ให้ต่อ /export_all.php ให้อัตโนมัติ
+const isPhpFile = /\.[a-zA-Z0-9]+$/.test(RAW);
+const API_ROOT = isPhpFile ? RAW.replace(/\/[^/]+$/, "") : RAW.replace(/\/+$/, "");
+const EXPORT_ALL_API = isPhpFile ? RAW : `${API_ROOT}/export_all.php`;
 
-/* ========== Safe fetch JSON ========== */
+/* ================= Settings ================= */
+const DEFAULT_PAGE_SIZE = 5000; // จำนวนแถวต่อหนึ่งตารางต่อการดึง
+const TABLES = ["repair", "used_parts", "other_cost"] as const; // ตารางที่ใช้
+
+/* ================= Safe fetch JSON ================= */
 async function fetchJSON(url: string) {
-  const res = await fetch(url, { credentials: "omit" });
+  const headers: Record<string, string> = {};
+  if (API_TOKEN) headers["X-Token"] = API_TOKEN;
+
+  const res = await fetch(url, { credentials: "omit", headers });
   const ct = res.headers.get("content-type") || "";
   const text = await res.text();
+
   if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}\n${text.slice(0, 200)}`);
-  if (!ct.includes("application/json")) {
-    throw new Error(`Not JSON from ${url}\nPreview: ${text.slice(0, 200)}`);
-  }
+  if (!ct.includes("application/json")) throw new Error(`Not JSON from ${url}\nPreview: ${text.slice(0, 200)}`);
   try {
     return JSON.parse(text);
   } catch {
@@ -42,42 +42,48 @@ async function fetchJSON(url: string) {
   }
 }
 
-/* ========== Helpers ========== */
+/* ================= Helpers ================= */
 function fmtDate(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 }
-function enumerateDates(from: string, to: string) {
-  const out: string[] = [];
-  const s = new Date(from + "T00:00:00");
-  const e = new Date(to + "T00:00:00");
-  if (isNaN(s.getTime()) || isNaN(e.getTime())) return out;
-  const first = s <= e ? s : e;
-  const last = s <= e ? e : s;
-  const cur = new Date(first);
-  while (cur <= last) {
-    out.push(fmtDate(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
-}
 function clean(v: any) {
   return String(v ?? "").trim();
 }
 
-/* ========== Pending helpers (ย้ายออกมานอกคอมโพเนนต์) ========== */
+// ป้องกัน backend ส่งทรงเพี้ยน ๆ
+function coerceRows(raw: any): any[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw.rows)) return raw.rows;
+  if (raw && typeof raw === "object") {
+    const keys = Object.keys(raw);
+    if (keys.length && keys.every(k => /^\d+$/.test(k))) {
+      return keys.sort((a, b) => +a - +b).map(k => (raw as any)[k]);
+    }
+  }
+  return [];
+}
+function getTableRows(json: any, table: string): any[] {
+  // รองรับทั้ง {tables:{repair:{rows:[]}}} หรือ {repair:[...]} หรือ {tables:{repair:[...]}}
+  if (json?.tables?.[table]?.rows) return coerceRows(json.tables[table].rows);
+  if (json?.tables?.[table]) return coerceRows(json.tables[table]);
+  if (json?.[table]) return coerceRows(json[table]);
+  return [];
+}
+
+/* ================= Pending helpers ================= */
 const ZERO_DATES = new Set(["", "0000-00-00", "0000-00-00 00:00:00"]);
 function isPending(row: any) {
-  // ใช้ชื่อหลัก r_dt_close; ถ้าบาง record มากับชื่อเก่า เผื่อไว้ด้วย
   const rawClose = String(row.r_dt_close ?? row.r_close_dt ?? "").trim();
   const notClosedByDate = ZERO_DATES.has(rawClose);
   const notClosedByFlag = String(row.r_close ?? "").trim() === "0";
   return notClosedByDate || notClosedByFlag;
 }
 
-/* ========== Mappers for modal tables ========== */
+/* ================= Mappers (DB -> UI modal) ================= */
 function mapPartFromDB(p: any): PartRow {
   return {
     id: String(p.up_id),
@@ -100,224 +106,164 @@ function mapExpenseFromDB(x: any): ExpenseRow {
   };
 }
 
+/* ========================================================= */
+
 export default function ReportPage() {
   const [items, setItems] = useState<RepairRow[]>([]);
+  const [allParts, setAllParts] = useState<any[]>([]);
+  const [allExps, setAllExps] = useState<any[]>([]);
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filters, setFilters] = useState<DrawerFilters>({ mode: "pendingAll" });
+
   const [q, setQ] = useState("");
 
-  // วันเดียว / วันที่จากเซิร์ฟเวอร์
-  const [dateStr, setDateStr] = useState<string>("today");
-  const [serverDate, setServerDate] = useState<string | null>(null);
-
-  // โหมดช่วงวัน (ถ้าตั้งค่า แสดงเป็นหัวข้อช่วงและหยุด useEffect วันเดียว)
+  // แสดงหัวข้อช่วง/โหมด
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
 
-  // ใบงานที่ถูกเลือก
+  // สำหรับโมดอลรายละเอียด
   const [selected, setSelected] = useState<RepairRow | null>(null);
-  // const [selectedOrder, setSelectedOrder] = useState<number | null>(null);
 
-  // เก็บอะไหล่/ค่าใช้จ่ายของวัน/ช่วง แล้วค่อยกรองเมื่อต้องการ
-  const [allParts, setAllParts] = useState<any[]>([]);
-  const [allExps, setAllExps] = useState<any[]>([]);
-
-  /* ---------- loaders (one day) ---------- */
-  async function loadOneDay(dayStr: string) {
-    const url = `${REPAIR_API}?date=${encodeURIComponent(dayStr)}&limit=1000`;
-    const json = await fetchJSON(url);
-    const rows = (json.rows ?? json.data ?? []) as RepairRow[];
-    return { rows, normalizedDate: json?.date as string | undefined };
-  }
-  async function loadPartsOneDay(dayStr: string) {
-    const url = `${PARTS_DAY_API}?date=${encodeURIComponent(dayStr)}&limit=10000`;
-    const json = await fetchJSON(url);
-    return (json.rows ?? []) as any[];
-  }
-  async function loadExpsOneDay(dayStr: string) {
-    const url = `${EXPENSES_DAY_API}?date=${encodeURIComponent(dayStr)}&limit=10000`;
-    const json = await fetchJSON(url);
-    return (json.rows ?? []) as any[];
-  }
-
-  /* ---------- loaders (range) ---------- */
-  async function loadRange(from: string, to: string) {
-    const days = enumerateDates(from, to);
-    if (!days.length) {
-      setItems([]); setServerDate(null); setRangeLabel(null);
-      setAllParts([]); setAllExps([]);
+  /* ---------- โหลดครั้งเดียว: ดึงทุกตารางทีเดียว ---------- */
+  async function loadAllOnce() {
+    if (!EXPORT_ALL_API) {
+      setErr("ไม่ได้ตั้งค่า VITE_API_BASE_URL");
       return;
     }
-    if (days.length > 31) throw new Error("ช่วงวันยาวเกิน 31 วัน กรุณาแบ่งค้นหา");
-
-    setLoading(true); setErr(null);
+    setLoading(true);
+    setErr(null);
     try {
-      const all: RepairRow[] = [];
-      const pAll: any[] = [];
-      const eAll: any[] = [];
-
-      for (let i = 0; i < days.length; i += PARALLEL_CHUNK) {
-        const slice = days.slice(i, i + PARALLEL_CHUNK);
-        const [repairResList, partsList, expsList] = await Promise.all([
-          Promise.all(slice.map(d => loadOneDay(d))),
-          Promise.all(slice.map(d => loadPartsOneDay(d))),
-          Promise.all(slice.map(d => loadExpsOneDay(d))),
-        ]);
-        repairResList.forEach(r => all.push(...r.rows));
-        partsList.forEach(arr => pAll.push(...arr));
-        expsList.forEach(arr => eAll.push(...arr));
-      }
-
-      setItems(all);
-      setAllParts(pAll);
-      setAllExps(eAll);
-      setServerDate(null);
-      setRangeLabel(
-        `${new Date(days[0] + "T00:00:00").toLocaleDateString("th-TH")} – ${new Date(
-          days.at(-1)! + "T00:00:00"
-        ).toLocaleDateString("th-TH")}`
+      const query = new URLSearchParams();
+      query.set("tables", TABLES.join(","));
+      query.set("pageSize", String(DEFAULT_PAGE_SIZE));
+      // order ให้ repair/parts/cost ใหม่สุดอยู่บนเพื่อกรองเร็ว
+      query.set(
+        "order",
+        JSON.stringify({ repair: "desc", used_parts: "desc", other_cost: "desc" })
       );
+
+      const url = `${EXPORT_ALL_API}?${query.toString()}`;
+      const json = await fetchJSON(url);
+
+      const rep = getTableRows(json, "repair") as RepairRow[];
+      const ups = getTableRows(json, "used_parts");
+      const ocs = getTableRows(json, "other_cost");
+
+      setItems(rep);
+      setAllParts(ups);
+      setAllExps(ocs);
+
+      setRangeLabel("รวมข้อมูลทั้งหมด (ดึงครั้งเดียว)");
     } catch (e: any) {
-      setItems([]); setRangeLabel(null);
-      setAllParts([]); setAllExps([]);
-      setErr(e?.message || "โหลดช่วงวันล้มเหลว");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  /* ---------- loader (pending all over long range) ---------- */
-  async function loadPendingAll(lookbackDays = PENDING_LOOKBACK_DAYS) {
-    const today = new Date();
-    const from = new Date(); from.setDate(today.getDate() - (lookbackDays - 1));
-    const fromStr = fmtDate(from);
-    const toStr   = fmtDate(today);
-
-    const days = enumerateDates(fromStr, toStr);
-    setLoading(true); setErr(null);
-    setRangeLabel(null);
-
-    try {
-      const all: RepairRow[] = [];
-      const pAll: any[] = [];
-      const eAll: any[] = [];
-
-      for (let i = 0; i < days.length; i += PARALLEL_CHUNK) {
-        const slice = days.slice(i, i + PARALLEL_CHUNK);
-        const [repairResList, partsList, expsList] = await Promise.all([
-          Promise.all(slice.map(d => loadOneDay(d))),
-          Promise.all(slice.map(d => loadPartsOneDay(d))),
-          Promise.all(slice.map(d => loadExpsOneDay(d))),
-        ]);
-        // รวมก่อน แล้วกรองใน useMemo ด้วย isPending()
-        repairResList.forEach(r => all.push(...r.rows));
-        partsList.forEach(arr => pAll.push(...arr));
-        expsList.forEach(arr => eAll.push(...arr));
-      }
-
-      setItems(all);
-      setAllParts(pAll);
-      setAllExps(eAll);
-      setServerDate(null);
-      setRangeLabel(
-        `งานค้างทั้งหมด • ${new Date(fromStr + "T00:00:00").toLocaleDateString("th-TH")} – ${new Date(
-          toStr + "T00:00:00"
-        ).toLocaleDateString("th-TH")}`
-      );
-    } catch (e: any) {
-      setItems([]); setAllParts([]); setAllExps([]);
+      setItems([]);
+      setAllParts([]);
+      setAllExps([]);
       setRangeLabel(null);
-      setErr(e?.message || "โหลดงานค้างทั้งหมดล้มเหลว");
+      setErr(e?.message || "โหลดข้อมูลรวมล้มเหลว");
     } finally {
       setLoading(false);
     }
   }
 
-  /* ---------- Effect: load single day (disabled when rangeLabel exists) ---------- */
   useEffect(() => {
-    let alive = true;
-    if (rangeLabel) return;
+    loadAllOnce();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    (async () => {
-      try {
-        setLoading(true); setErr(null);
-        const [repairRes, partsRes, expsRes] = await Promise.all([
-          loadOneDay(dateStr),
-          loadPartsOneDay(dateStr),
-          loadExpsOneDay(dateStr),
-        ]);
-        if (!alive) return;
-        setItems(repairRes.rows);
-        setAllParts(partsRes);
-        setAllExps(expsRes);
-        if (repairRes.normalizedDate) {
-          setServerDate(repairRes.normalizedDate);
-          if (dateStr === "today" || dateStr === "latest") setDateStr(repairRes.normalizedDate);
-        }
-      } catch (e: any) {
-        if (!alive) return;
-        setErr(e?.message || "โหลดข้อมูลล้มเหลว");
-        setItems([]); setAllParts([]); setAllExps([]);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-
-    return () => { alive = false; };
-  }, [dateStr, rangeLabel]);
-
-  /* ---------- Client filter ---------- */
+  /* ---------- กรองฝั่ง client ทั้งหมด ---------- */
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
+
     return items.filter((row) => {
-      // คีย์เวิร์ด
+      // keyword
       if (key) {
         const hay = [
-          row.r_job_num, row.r_v_plate, row.r_v_name,
-          row.r_repair_list, row.r_technician, row.r_recorder,
+          row.r_job_num,
+          row.r_v_plate,
+          row.r_v_name,
+          row.r_v_chassis,
+          row.r_repair_list,
+          row.r_technician,
+          row.r_recorder,
           String(row.r_id),
-        ].map(v => (v ? String(v).toLowerCase() : "")).join(" ");
+        ]
+          .map((v) => (v ? String(v).toLowerCase() : ""))
+          .join(" ");
         if (!hay.includes(key)) return false;
       }
 
-      // โหมดฟิลเตอร์
+      // โหมดต่าง ๆ
       if (filters.mode === "pendingAll") {
-        return isPending(row);             // ✅ โชว์เฉพาะงานค้าง
+        return isPending(row);
       }
-      if (filters.mode === "custom") {
-        return true;                       // โหลดช่วงวันแล้ว ค่อยกรองด้วยคีย์เวิร์ด
+
+      if (filters.mode === "daily") {
+        if (filters.date) {
+          const d = parseDate(row.r_dt_rec);
+          const target = new Date(`${filters.date}T00:00:00`);
+          if (!d || !isSameDay(d, target)) return false;
+        }
+        if (filters.technician?.trim()) {
+          const t = filters.technician.trim().toLowerCase();
+          const techSrc = String(row.r_technician || "").toLowerCase();
+          if (!techSrc.includes(t)) return false;
+        }
+        return true;
       }
-      if (filters.mode === "daily" && filters.date) {
-        const d = parseDate(row.r_dt_rec); if (!d) return false;
-        return isSameDay(d, new Date(`${filters.date}T00:00:00`));
-      }
+
       if (filters.mode === "history") {
-        const ok1 = filters.carName ? (row.r_v_name || row.r_v_plate || "")
-          .toLowerCase().includes(filters.carName.toLowerCase()) : true;
-        const ok2 = filters.plate ? (row.r_v_plate || "")
-          .toLowerCase().includes(filters.plate.toLowerCase()) : true;
-        const ok3 = filters.vin ? String(row.r_v_chassis || row.r_job_num || "")
-          .toLowerCase().includes(filters.vin.toLowerCase()) : true;
-        return ok1 && ok2 && ok3;
+        const car = (filters.carName ?? "").trim().toLowerCase();
+        const plate = (filters.plate ?? "").trim().toLowerCase();
+        const vin = (filters.vin ?? "").trim().toLowerCase();
+
+        const nameSrc = String(row.r_v_name || "").toLowerCase();
+        const plateSrc = String(row.r_v_plate || "").toLowerCase();
+        const vinSrc = String(row.r_v_chassis || row.r_job_num || "").toLowerCase();
+
+        if (car && !nameSrc.includes(car)) return false;
+        if (plate && !plateSrc.includes(plate)) return false;
+        if (vin && !vinSrc.includes(vin)) return false;
+
+        return true;
       }
+
+      if (filters.mode === "custom") {
+        // กรองช่วงวัน
+        const from = (filters as any).from || (filters as any).to;
+        const to = (filters as any).to || (filters as any).from;
+        if (from && to) {
+          const d = parseDate(row.r_dt_rec);
+          const s = new Date(`${from}T00:00:00`);
+          const e = new Date(`${to}T23:59:59`);
+          if (!d || d < s || d > e) return false;
+        }
+        // ถ้ามี technician ใน custom ด้วย ใช้ in-guard ปลอดภัย
+        if ("technician" in (filters as any)) {
+          const val = (filters as any).technician;
+          if (typeof val === "string" && val.trim()) {
+            const t = val.trim().toLowerCase();
+            const techSrc = String(row.r_technician || "").toLowerCase();
+            if (!techSrc.includes(t)) return false;
+          }
+        }
+        return true;
+      }
+
+      // default
       return true;
     });
   }, [items, q, filters]);
 
-  /* ---------- Title date ---------- */
+  /* ---------- Title/date on navbar ---------- */
   const titleDate = useMemo(() => {
     if (rangeLabel) return rangeLabel;
-    const dStr = serverDate || items[0]?.r_dt_rec || fmtDate(new Date());
-    const d =
-      /^\d{4}-\d{2}-\d{2}$/.test(String(dStr))
-        ? new Date(`${dStr}T00:00:00`)
-        : parseDate(String(dStr)) ?? new Date();
-    return d.toLocaleDateString("th-TH", { year: "numeric", month: "2-digit", day: "2-digit" });
-  }, [items, serverDate, rangeLabel]);
+    return `รวมทั้งหมด (${filtered.length} รายการ)`;
+  }, [rangeLabel, filtered.length]);
 
-  /* ---------- Rows in modal ---------- */
+  /* ---------- Modal rows ---------- */
   const partsForSelected = useMemo<PartRow[]>(() => {
     if (!selected) return [];
     const id = clean(selected.r_id);
@@ -332,52 +278,64 @@ export default function ReportPage() {
     const id = clean(selected.r_id);
     const num = clean(selected.r_job_num);
     return allExps
-      .filter((x) =>
-        clean(x.oc_job_id) === id ||
-        clean(x.oc_ref_id) === id ||
-        clean(x.oc_job_num) === num
+      .filter(
+        (x) =>
+          clean(x.oc_job_id) === id ||
+          clean(x.oc_ref_id) === id ||
+          clean(x.oc_job_num) === num
       )
       .map(mapExpenseFromDB);
   }, [selected, allExps]);
 
+  /* ---------- Handler แยก (กัน TS อินเฟอร์ never) ---------- */
+  const handleFilterSubmit = async (f: DrawerFilters) => {
+    setErr(null);
+    setFilters(f);
+
+    if (f.mode === "custom") {
+      const from = f.from || f.to || fmtDate(new Date());
+      const to = f.to || f.from || from;
+      setRangeLabel(
+        `${new Date(`${from}T00:00:00`).toLocaleDateString("th-TH")} – ${new Date(
+          `${to}T00:00:00`
+        ).toLocaleDateString("th-TH")}`
+      );
+      return;
+    }
+
+    if (f.mode === "daily" && f.date) {
+      setRangeLabel(
+        `งานประจำวันที่ ${new Date(`${f.date}T00:00:00`).toLocaleDateString("th-TH")}`
+      );
+      return;
+    }
+
+    if (f.mode === "pendingAll") {
+      setRangeLabel("งานค้างทั้งหมด (กรองจากข้อมูลรวม))");
+      return;
+    }
+
+    if (f.mode === "history") {
+      const label =
+        (f.plate && `ป้ายทะเบียน ${f.plate}`) ||
+        (f.carName && `หมายเลขรถ ${f.carName}`) ||
+        (f.vin && `เลขตัวถัง ${f.vin}`) ||
+        "รถคันที่เลือก";
+      setRangeLabel(`ประวัติแจ้งซ่อม • ${label}`);
+      return;
+    }
+  };
+
   /* ---------- Render ---------- */
   return (
     <div className="min-h-screen bg-gray-900 text-white relative">
-      <NavBar
-        onOpenMenu={() => setDrawerOpen(true)}
-        subtitle={<>{rangeLabel ? "ช่วงวันที่ " : "งานประจำวันที่ "} {titleDate}</>}
-      />
+      <NavBar onOpenMenu={() => setDrawerOpen(true)} subtitle={<>{titleDate}</>} />
 
       <FilterDrawer
         open={drawerOpen}
         initial={filters}
         onClose={() => setDrawerOpen(false)}
-        onSubmit={async (f) => {
-          setFilters(f);
-          setErr(null);
-
-          if (f.mode === "custom") {
-            const from = f.from || f.to || fmtDate(new Date());
-            const to   = f.to   || f.from || from;
-            setRangeLabel(null);
-            await loadRange(from, to);
-            return;
-          }
-
-          setRangeLabel(null);
-
-          if (f.mode === "daily" && f.date) {
-            setDateStr(f.date);
-            return;
-          }
-
-          if (f.mode === "pendingAll") {
-            await loadPendingAll(); // ← โหลดย้อนหลังทั้งช่วง แล้วกรองใน filtered
-            return;
-          }
-
-          // history = กรองในหน้า
-        }}
+        onSubmit={handleFilterSubmit as (f: unknown) => void}
       />
 
       {err && <p className="text-red-300 text-center mt-3">{err}</p>}
@@ -399,7 +357,9 @@ export default function ReportPage() {
                 order={idx + 1}
                 row={item}
                 toDateTime={toDateTime}
-                onOpen={() => { setSelected(item); }}
+                onOpen={() => {
+                  setSelected(item);
+                }}
               />
             ))
           )}
@@ -409,16 +369,14 @@ export default function ReportPage() {
       <DetailsModal
         open={!!selected}
         row={selected}
-        // order={selectedOrder ?? undefined}
         parts={partsForSelected}
         expenses={expsForSelected}
-        onClose={() => { setSelected(null); }}
+        onClose={() => {
+          setSelected(null);
+        }}
       />
 
-      <LoadingOverlay
-        show={loading}
-        label={rangeLabel ? "กำลังรวมข้อมูลช่วงวันที่..." : "กำลังโหลดข้อมูล..."}
-      />
+      <LoadingOverlay show={loading} label="กำลังโหลดข้อมูลรวม..." />
     </div>
   );
 }
