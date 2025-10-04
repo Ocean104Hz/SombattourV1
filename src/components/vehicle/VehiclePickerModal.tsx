@@ -4,12 +4,26 @@ import type React from "react";
 import { FiSearch, FiX } from "react-icons/fi";
 import type { VehicleRow as VehicleRowBase } from "@/types/vehicle";
 
-/** ===== Build endpoint from .env ===== */
-const RAW_BASE = (((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || "").trim();
-const isPhpFile = /\.[a-zA-Z0-9]+$/.test(RAW_BASE);
-const API_ROOT = isPhpFile ? RAW_BASE.replace(/\/[^/]+$/, "") : RAW_BASE.replace(/\/+$/, "");
-const VEHICLE_API = API_ROOT ? `${API_ROOT}/vehicle_search.php` : undefined;
+/** ===== Build endpoint from .env (แข็งแรง) ===== */
+// 1) ให้ตั้ง URL ของ vehicle โดยตรงได้ (นิ่งสุด)
+const VEHICLE_API_DIRECT =
+  (((import.meta as any).env?.VITE_VEHICLE_API as string) || "").trim();
 
+// 2) ถ้าไม่ตั้งไว้ → derive จาก VITE_API_BASE_URL (รองรับชี้ไฟล์/โฟลเดอร์ + query)
+const RAW_BASE =
+  (((import.meta as any).env?.VITE_API_BASE_URL as string) || "").trim();
+// เป็นไฟล์ .php จริงหรือไม่ (เผื่อมี query ต่อท้าย)
+const isPhpFile = /\.php(\?|$)/i.test(RAW_BASE);
+// root = โฟลเดอร์ของไฟล์ php หรือโฟลเดอร์ฐาน
+const API_ROOT = isPhpFile
+  ? RAW_BASE.replace(/\/[^/?#]+(\?.*)?$/, "") // ตัด segment สุดท้าย แม้มี query
+  : RAW_BASE.replace(/\/+$/, "");
+
+// 3) URL ที่จะใช้จริง: ให้ VEHICLE_API ชนะก่อน
+const VEHICLE_API =
+  VEHICLE_API_DIRECT || (API_ROOT ? `${API_ROOT}/vehicle_search.php` : "");
+
+/* ---------- ชนิดพร็อพและแถว ---------- */
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -24,11 +38,12 @@ type VehicleRowUI = VehicleRowBase & {
   v_inv_com?: string;
 };
 
+/* ---------- utils ---------- */
 function cls(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(" ");
 }
 
-// บีบ raw → array
+// บีบ raw → array เสมอ
 function coerceArray(raw: any): any[] {
   if (Array.isArray(raw)) return raw;
   if (raw && Array.isArray((raw as any).rows)) return (raw as any).rows;
@@ -74,23 +89,20 @@ function useIsTouchDevice() {
   return isTouch;
 }
 
-/* ---------- format helpers ---------- */
+/* ---------- format helpers (ให้ตรง UI ที่ต้องการ) ---------- */
 const ZERO = new Set(["", "0000-00-00", "0000-00-00 00:00:00", null as any, undefined as any]);
 const fmt = (v: any) => (ZERO.has(v as any) ? "" : String(v));
 const fmtLen = (v: any) => {
   const s = String(v ?? "").trim();
-  if (!s) return "";
-  // ถ้าฐานเก็บ 12/15/18 ให้แสดงตัวเลขเฉย ๆ ตามภาพ
-  // ถ้าอยากต่อ "เมตร" เติมได้: return s + " เมตร";
-  return s;
+  return s || "";
 };
 const fmtDate = (v: any) => {
   const s = String(v ?? "").trim();
   if (!s || ZERO.has(s as any)) return "";
-  // แสดง YYYY-MM-DD ตรง ๆ ตามภาพ
-  return s.slice(0, 10);
+  return s.slice(0, 10); // YYYY-MM-DD
 };
 
+/* ================= Component ================= */
 export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<VehicleRowUI[]>([]);
@@ -100,7 +112,10 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
   const isTouch = useIsTouchDevice();
 
   const howToPick = useMemo(
-    () => (isTouch ? "แตะปุ่ม “เลือก” หรือแตะแถว 1 ครั้ง" : "ดับเบิลคลิกแถว หรือกดปุ่ม “เลือก”"),
+    () =>
+      isTouch
+        ? "แตะปุ่ม “เลือก” หรือแตะแถว 1 ครั้ง"
+        : "ดับเบิลคลิกแถว หรือกดปุ่ม “เลือก”",
     [isTouch]
   );
 
@@ -110,31 +125,53 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
 
   useEffect(() => {
     if (!open) return;
+
     if (!VEHICLE_API) {
-      setErr("ไม่ได้ตั้งค่า VITE_API_BASE_URL");
+      setErr("ไม่ได้ตั้งค่า VITE_API_BASE_URL / VITE_VEHICLE_API");
       setRows([]);
       return;
     }
+
     const t = setTimeout(async () => {
       setErr(null);
       try {
         setLoading(true);
+
         const qs = new URLSearchParams();
         if (q) qs.set("q", q);
-        // ตั้งให้พอครอบคลุมทั้งหมด (ปรับตามจำนวนจริงได้)
         qs.set("limit", "2000");
+        qs.set("_", String(Date.now())); // cache buster กัน proxy/cache
 
         const url = `${VEHICLE_API}?${qs.toString()}`;
         const res = await fetch(url, { credentials: "omit" });
-        const ct = res.headers.get("content-type") || "";
         const text = await res.text();
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-        if (!ct.includes("application/json")) throw new Error(`Not JSON. Preview: ${text.slice(0, 120)}`);
+        // สื่อสาร error ฝั่ง HTTP ชัดเจน
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+        }
 
-        const json = JSON.parse(text);
-        const data = (json as any).rows ?? (json as any).data ?? json;
-        setRows(normalizeRows(data));
+        // พยายาม parse เป็น JSON แม้ header จะไม่ใช่ application/json
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          const isHtml = /^\s*</.test(text);
+          throw new Error(
+            (isHtml
+              ? "HTML response (อาจโดน .htaccess rewrite หรือ URL ผิด): "
+              : "Invalid JSON: ") + text.slice(0, 200)
+          );
+        }
+
+        // รองรับหลายรูปแบบ: {rows} | {data} | {result} | array | {data:{rows:[...]}}
+        const candidate =
+          json?.rows ?? json?.data ?? json?.result ?? json;
+        const rowsRaw = Array.isArray(candidate?.rows)
+          ? candidate.rows
+          : candidate;
+
+        setRows(normalizeRows(rowsRaw));
       } catch (e: any) {
         console.error("Vehicle fetch error:", e);
         setErr(e?.message || "โหลดข้อมูลรถล้มเหลว");
@@ -143,24 +180,37 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
         setLoading(false);
       }
     }, 250);
+
     return () => clearTimeout(t);
   }, [q, open]);
 
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [onClose]);
 
-  const pick = (row: VehicleRowUI) => { onPick(row); onClose(); };
-  const rowClick = (row: VehicleRowUI) => { if (isTouch) pick(row); };
-  const rowDbl  = (row: VehicleRowUI) => pick(row);
-  const rowKey  = (e: React.KeyboardEvent<HTMLTableRowElement>, row: VehicleRowUI) => { if (e.key === "Enter") pick(row); };
+  const pick = (row: VehicleRowUI) => {
+    onPick(row);
+    onClose();
+  };
+  const rowClick = (row: VehicleRowUI) => {
+    if (isTouch) pick(row);
+  };
+  const rowDbl = (row: VehicleRowUI) => pick(row);
+  const rowKey = (e: React.KeyboardEvent<HTMLTableRowElement>, row: VehicleRowUI) => {
+    if (e.key === "Enter") pick(row);
+  };
 
   return (
     <>
       <div
-        className={cls("fixed inset-0 bg-black/50 transition-opacity z-[1400]", open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none")}
+        className={cls(
+          "fixed inset-0 bg-black/50 transition-opacity z-[1400]",
+          open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        )}
         onClick={onClose}
       />
       <div
@@ -174,8 +224,14 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
         aria-labelledby="vehicle-modal-title"
       >
         <div className="flex items-center justify-between p-4 border-b">
-          <h2 id="vehicle-modal-title" className="text-2xl font-extrabold">รถทั้งหมด</h2>
-          <button className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200" onClick={onClose} aria-label="ปิด">
+          <h2 id="vehicle-modal-title" className="text-2xl font-extrabold">
+            รถทั้งหมด
+          </h2>
+          <button
+            className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200"
+            onClick={onClose}
+            aria-label="ปิด"
+          >
             <FiX className="text-gray-700" />
           </button>
         </div>
@@ -202,19 +258,44 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
               <thead>
                 <tr className="bg-gray-100 text-gray-800">
                   {[
-                    "ลำดับ","ไอดี","หมายเลขรถ","เส้นทาง","มาตรฐาน","ความยาว",
-                    "เลขทะเบียน","เลขคัสซี","เลขเครื่องยนต์","ยี่ห้อรถ","รุ่น",
-                    "ผู้ประกอบการ","วางบิล","จดทะเบียนครั้งแรก",""
+                    "ลำดับ",
+                    "ไอดี",
+                    "หมายเลขรถ",
+                    "เส้นทาง",
+                    "มาตรฐาน",
+                    "ความยาว",
+                    "เลขทะเบียน",
+                    "เลขคัสซี",
+                    "เลขเครื่องยนต์",
+                    "ยี่ห้อรถ",
+                    "รุ่น",
+                    "ผู้ประกอบการ",
+                    "วางบิล",
+                    "จดทะเบียนครั้งแรก",
+                    "",
                   ].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left whitespace-nowrap font-semibold">{h}</th>
+                    <th
+                      key={h}
+                      className="px-3 py-2 text-left whitespace-nowrap font-semibold"
+                    >
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="text-gray-900">
                 {loading ? (
-                  <tr><td colSpan={15} className="px-3 py-6 text-center text-gray-500">กำลังโหลด…</td></tr>
+                  <tr>
+                    <td colSpan={15} className="px-3 py-6 text-center text-gray-500">
+                      กำลังโหลด…
+                    </td>
+                  </tr>
                 ) : rows.length === 0 ? (
-                  <tr><td colSpan={15} className="px-3 py-6 text-center text-gray-500">ไม่มีข้อมูล</td></tr>
+                  <tr>
+                    <td colSpan={15} className="px-3 py-6 text-center text-gray-500">
+                      ไม่มีข้อมูล
+                    </td>
+                  </tr>
                 ) : (
                   rows.map((r, i) => (
                     <tr
@@ -243,7 +324,11 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
                       <td className="px-3 py-3">{fmtDate(r.v_register)}</td>
                       <td className="px-3 py-3 text-right">
                         <button
-                          onClick={(e) => { e.stopPropagation(); onPick(r); onClose(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPick(r);
+                            onClose();
+                          }}
                           className="px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
                           aria-label={`เลือก ${r.v_name || r.v_plate || r.v_id}`}
                           title="เลือก"
@@ -261,7 +346,10 @@ export default function VehiclePickerModal({ open, onClose, onPick }: Props) {
 
         <div className="p-4 border-t flex items-center justify-between text-xs text-gray-600">
           <span>{howToPick}</span>
-          <button onClick={onClose} className="px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200"
+          >
             ไม่ต้องการเลือก
           </button>
         </div>

@@ -11,38 +11,39 @@ import LoadingOverlay from "@/components/common/LoadingOverlay";
 import SkeletonCards from "@/components/report/SkeletonCards";
 import NavBar from "@/layouts/NavBar";
 
-/* ============ Endpoint (.env อาจเป็น '.../api' หรือ '.../api/export_all.php') ============ */
-const RAW = (((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || "").trim();
-const API_TOKEN = (import.meta as any).env?.VITE_API_TOKEN as string | undefined;
+/* ================== Endpoints (แบบ B: URL เต็มจาก .env) ================== */
+const EXPORT_ALL_API = (
+  ((import.meta as any).env?.VITE_EXPORT_ALL as string) || ""
+).trim();
+// (หน้าอื่น ๆ ถ้าจะใช้ก็อ่านตรง ๆ ได้ เช่น)
+// const PARTS_DAY_API    = (((import.meta as any).env?.VITE_PARTS_DAY as string) || "").trim();
+// const EXPENSES_DAY_API = (((import.meta as any).env?.VITE_EXPENSES_DAY as string) || "").trim();
 
-// ถ้า VITE_API_BASE_URL เป็นไฟล์ .php ใช้ตรง ๆ; ถ้าเป็นโฟลเดอร์ ให้ต่อ /export_all.php ให้อัตโนมัติ
-const isPhpFile = /\.[a-zA-Z0-9]+$/.test(RAW);
-const API_ROOT = isPhpFile ? RAW.replace(/\/[^/]+$/, "") : RAW.replace(/\/+$/, "");
-const EXPORT_ALL_API = isPhpFile ? RAW : `${API_ROOT}/export_all.php`;
+/* ================== Settings ================== */
+const DEFAULT_PAGE_SIZE = 5000;
+const TABLES = ["repair", "used_parts", "other_cost"] as const;
 
-/* ================= Settings ================= */
-const DEFAULT_PAGE_SIZE = 5000; // จำนวนแถวต่อหนึ่งตารางต่อการดึง
-const TABLES = ["repair", "used_parts", "other_cost"] as const; // ตารางที่ใช้
-
-/* ================= Safe fetch JSON ================= */
+/* ================== Safe fetch JSON (ไม่มี token) ================== */
 async function fetchJSON(url: string) {
-  const headers: Record<string, string> = {};
-  if (API_TOKEN) headers["X-Token"] = API_TOKEN;
-
-  const res = await fetch(url, { credentials: "omit", headers });
+  const res = await fetch(url, { credentials: "omit" });
   const ct = res.headers.get("content-type") || "";
   const text = await res.text();
 
-  if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}\n${text.slice(0, 200)}`);
-  if (!ct.includes("application/json")) throw new Error(`Not JSON from ${url}\nPreview: ${text.slice(0, 200)}`);
+  if (!res.ok)
+    throw new Error(`HTTP ${res.status} @ ${url}\n${text.slice(0, 200)}`);
+  if (!ct.includes("application/json")) {
+    throw new Error(`Not JSON from ${url}\nPreview: ${text.slice(0, 200)}`);
+  }
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`JSON parse error from ${url}\nPreview: ${text.slice(0, 200)}`);
+    throw new Error(
+      `JSON parse error from ${url}\nPreview: ${text.slice(0, 200)}`
+    );
   }
 }
 
-/* ================= Helpers ================= */
+/* ================== Helpers ================== */
 function fmtDate(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -53,28 +54,39 @@ function clean(v: any) {
   return String(v ?? "").trim();
 }
 
-// ป้องกัน backend ส่งทรงเพี้ยน ๆ
+// รองรับรูป response ที่ต่างกัน
 function coerceRows(raw: any): any[] {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
   if (Array.isArray(raw.rows)) return raw.rows;
   if (raw && typeof raw === "object") {
     const keys = Object.keys(raw);
-    if (keys.length && keys.every(k => /^\d+$/.test(k))) {
-      return keys.sort((a, b) => +a - +b).map(k => (raw as any)[k]);
+    if (keys.length && keys.every((k) => /^\d+$/.test(k))) {
+      return keys.sort((a, b) => +a - +b).map((k) => (raw as any)[k]);
     }
   }
   return [];
 }
 function getTableRows(json: any, table: string): any[] {
-  // รองรับทั้ง {tables:{repair:{rows:[]}}} หรือ {repair:[...]} หรือ {tables:{repair:[...]}}
   if (json?.tables?.[table]?.rows) return coerceRows(json.tables[table].rows);
   if (json?.tables?.[table]) return coerceRows(json.tables[table]);
   if (json?.[table]) return coerceRows(json[table]);
   return [];
 }
 
-/* ================= Pending helpers ================= */
+/* ================== DrawerFilters แบบหลวม (เพื่ออ่าน date/technician ฯลฯ) ================== */
+type FiltersLoose = DrawerFilters & {
+  date?: string;
+  technician?: string;
+  from?: string;
+  to?: string;
+  carName?: string;
+  plate?: string;
+  vin?: string;
+};
+const asLoose = (f: DrawerFilters) => f as FiltersLoose;
+
+/* ================== Pending helpers ================== */
 const ZERO_DATES = new Set(["", "0000-00-00", "0000-00-00 00:00:00"]);
 function isPending(row: any) {
   const rawClose = String(row.r_dt_close ?? row.r_close_dt ?? "").trim();
@@ -83,7 +95,7 @@ function isPending(row: any) {
   return notClosedByDate || notClosedByFlag;
 }
 
-/* ================= Mappers (DB -> UI modal) ================= */
+/* ================== Mappers (DB -> UI modal) ================== */
 function mapPartFromDB(p: any): PartRow {
   return {
     id: String(p.up_id),
@@ -106,9 +118,11 @@ function mapExpenseFromDB(x: any): ExpenseRow {
   };
 }
 
-/* ========================================================= */
+/* ====================================================================== */
 
 export default function ReportPage() {
+  const todayStr = fmtDate(new Date());
+
   const [items, setItems] = useState<RepairRow[]>([]);
   const [allParts, setAllParts] = useState<any[]>([]);
   const [allExps, setAllExps] = useState<any[]>([]);
@@ -117,20 +131,24 @@ export default function ReportPage() {
   const [err, setErr] = useState<string | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [filters, setFilters] = useState<DrawerFilters>({ mode: "pendingAll" });
+
+  // ✅ เริ่มต้นเป็น "รายวัน" + วันนี้
+  const [filters, setFilters] = useState<DrawerFilters>(
+    asLoose({ mode: "daily", date: todayStr })
+  );
 
   const [q, setQ] = useState("");
 
-  // แสดงหัวข้อช่วง/โหมด
+  // ใช้เฉพาะโหมดที่ไม่ใช่ daily
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
 
-  // สำหรับโมดอลรายละเอียด
+  // โมดอลรายละเอียด
   const [selected, setSelected] = useState<RepairRow | null>(null);
 
-  /* ---------- โหลดครั้งเดียว: ดึงทุกตารางทีเดียว ---------- */
+  /* ---------- ดึงทุกตารางทีเดียว ---------- */
   async function loadAllOnce() {
     if (!EXPORT_ALL_API) {
-      setErr("ไม่ได้ตั้งค่า VITE_API_BASE_URL");
+      setErr("ไม่ได้ตั้งค่า VITE_EXPORT_ALL");
       return;
     }
     setLoading(true);
@@ -139,24 +157,23 @@ export default function ReportPage() {
       const query = new URLSearchParams();
       query.set("tables", TABLES.join(","));
       query.set("pageSize", String(DEFAULT_PAGE_SIZE));
-      // order ให้ repair/parts/cost ใหม่สุดอยู่บนเพื่อกรองเร็ว
       query.set(
         "order",
-        JSON.stringify({ repair: "desc", used_parts: "desc", other_cost: "desc" })
+        JSON.stringify({
+          repair: "desc",
+          used_parts: "desc",
+          other_cost: "desc",
+        })
       );
 
       const url = `${EXPORT_ALL_API}?${query.toString()}`;
       const json = await fetchJSON(url);
 
-      const rep = getTableRows(json, "repair") as RepairRow[];
-      const ups = getTableRows(json, "used_parts");
-      const ocs = getTableRows(json, "other_cost");
+      setItems(getTableRows(json, "repair") as RepairRow[]);
+      setAllParts(getTableRows(json, "used_parts"));
+      setAllExps(getTableRows(json, "other_cost"));
 
-      setItems(rep);
-      setAllParts(ups);
-      setAllExps(ocs);
-
-      setRangeLabel("รวมข้อมูลทั้งหมด (ดึงครั้งเดียว)");
+      setRangeLabel(null); // โหมดรายวันเป็นค่าเริ่มต้น
     } catch (e: any) {
       setItems([]);
       setAllParts([]);
@@ -170,10 +187,9 @@ export default function ReportPage() {
 
   useEffect(() => {
     loadAllOnce();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- กรองฝั่ง client ทั้งหมด ---------- */
+  /* ---------- กรองฝั่ง client ---------- */
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
 
@@ -195,75 +211,81 @@ export default function ReportPage() {
         if (!hay.includes(key)) return false;
       }
 
-      // โหมดต่าง ๆ
-      if (filters.mode === "pendingAll") {
-        return isPending(row);
-      }
-
+      // รายวัน
       if (filters.mode === "daily") {
-        if (filters.date) {
+        const dStr = asLoose(filters).date;
+        if (dStr) {
           const d = parseDate(row.r_dt_rec);
-          const target = new Date(`${filters.date}T00:00:00`);
+          const target = new Date(`${dStr}T00:00:00`);
           if (!d || !isSameDay(d, target)) return false;
         }
-        if (filters.technician?.trim()) {
-          const t = filters.technician.trim().toLowerCase();
+        const tech = asLoose(filters).technician?.trim();
+        if (tech) {
+          const t = tech.toLowerCase();
           const techSrc = String(row.r_technician || "").toLowerCase();
           if (!techSrc.includes(t)) return false;
         }
         return true;
       }
 
+      // งานค้าง
+      if (filters.mode === "pendingAll") return isPending(row);
+
+      // ประวัติรถ
       if (filters.mode === "history") {
-        const car = (filters.carName ?? "").trim().toLowerCase();
-        const plate = (filters.plate ?? "").trim().toLowerCase();
-        const vin = (filters.vin ?? "").trim().toLowerCase();
+        const car = (asLoose(filters).carName ?? "").trim().toLowerCase();
+        const plate = (asLoose(filters).plate ?? "").trim().toLowerCase();
+        const vin = (asLoose(filters).vin ?? "").trim().toLowerCase();
 
         const nameSrc = String(row.r_v_name || "").toLowerCase();
         const plateSrc = String(row.r_v_plate || "").toLowerCase();
-        const vinSrc = String(row.r_v_chassis || row.r_job_num || "").toLowerCase();
+        const vinSrc = String(
+          row.r_v_chassis || row.r_job_num || ""
+        ).toLowerCase();
 
         if (car && !nameSrc.includes(car)) return false;
         if (plate && !plateSrc.includes(plate)) return false;
         if (vin && !vinSrc.includes(vin)) return false;
-
         return true;
       }
 
+      // ช่วงวันที่กำหนดเอง
       if (filters.mode === "custom") {
-        // กรองช่วงวัน
-        const from = (filters as any).from || (filters as any).to;
-        const to = (filters as any).to || (filters as any).from;
+        const from = asLoose(filters).from || asLoose(filters).to;
+        const to = asLoose(filters).to || asLoose(filters).from;
         if (from && to) {
           const d = parseDate(row.r_dt_rec);
           const s = new Date(`${from}T00:00:00`);
           const e = new Date(`${to}T23:59:59`);
           if (!d || d < s || d > e) return false;
         }
-        // ถ้ามี technician ใน custom ด้วย ใช้ in-guard ปลอดภัย
-        if ("technician" in (filters as any)) {
-          const val = (filters as any).technician;
-          if (typeof val === "string" && val.trim()) {
-            const t = val.trim().toLowerCase();
-            const techSrc = String(row.r_technician || "").toLowerCase();
-            if (!techSrc.includes(t)) return false;
-          }
+        const tech = asLoose(filters).technician;
+        if (typeof tech === "string" && tech.trim()) {
+          const t = tech.trim().toLowerCase();
+          const techSrc = String(row.r_technician || "").toLowerCase();
+          if (!techSrc.includes(t)) return false;
         }
         return true;
       }
 
-      // default
       return true;
     });
   }, [items, q, filters]);
 
-  /* ---------- Title/date on navbar ---------- */
+  /* ---------- Title (รายวันเป็นหลัก) ---------- */
+  const dateLoose = asLoose(filters).date;
   const titleDate = useMemo(() => {
+    if (filters.mode === "daily" && dateLoose) {
+      const d = new Date(`${dateLoose}T00:00:00`);
+      return `งานประจำวันที่ ${d.toLocaleDateString("th-TH")} • ${
+        filtered.length
+      } รายการ`;
+    }
     if (rangeLabel) return rangeLabel;
     return `รวมทั้งหมด (${filtered.length} รายการ)`;
-  }, [rangeLabel, filtered.length]);
+  }, [filters.mode, dateLoose, filtered.length, rangeLabel]);
 
-  /* ---------- Modal rows ---------- */
+  /* ---------- Rows ในโมดอล ---------- */
   const partsForSelected = useMemo<PartRow[]>(() => {
     if (!selected) return [];
     const id = clean(selected.r_id);
@@ -287,39 +309,36 @@ export default function ReportPage() {
       .map(mapExpenseFromDB);
   }, [selected, allExps]);
 
-  /* ---------- Handler แยก (กัน TS อินเฟอร์ never) ---------- */
+  /* ---------- Handler ของ FilterDrawer ---------- */
   const handleFilterSubmit = async (f: DrawerFilters) => {
     setErr(null);
     setFilters(f);
 
     if (f.mode === "custom") {
-      const from = f.from || f.to || fmtDate(new Date());
-      const to = f.to || f.from || from;
+      const from = asLoose(f).from || asLoose(f).to || fmtDate(new Date());
+      const to = asLoose(f).to || asLoose(f).from || from;
       setRangeLabel(
-        `${new Date(`${from}T00:00:00`).toLocaleDateString("th-TH")} – ${new Date(
-          `${to}T00:00:00`
-        ).toLocaleDateString("th-TH")}`
+        `${new Date(`${from}T00:00:00`).toLocaleDateString(
+          "th-TH"
+        )} – ${new Date(`${to}T00:00:00`).toLocaleDateString("th-TH")}`
       );
       return;
     }
 
-    if (f.mode === "daily" && f.date) {
-      setRangeLabel(
-        `งานประจำวันที่ ${new Date(`${f.date}T00:00:00`).toLocaleDateString("th-TH")}`
-      );
+    if (f.mode === "daily" && asLoose(f).date) {
+      setRangeLabel(null);
       return;
     }
-
     if (f.mode === "pendingAll") {
-      setRangeLabel("งานค้างทั้งหมด (กรองจากข้อมูลรวม))");
+      setRangeLabel("งานค้างทั้งหมด (กรองจากข้อมูลรวม)");
       return;
     }
 
     if (f.mode === "history") {
       const label =
-        (f.plate && `ป้ายทะเบียน ${f.plate}`) ||
-        (f.carName && `หมายเลขรถ ${f.carName}`) ||
-        (f.vin && `เลขตัวถัง ${f.vin}`) ||
+        (asLoose(f).plate && `ป้ายทะเบียน ${asLoose(f).plate}`) ||
+        (asLoose(f).carName && `หมายเลขรถ ${asLoose(f).carName}`) ||
+        (asLoose(f).vin && `เลขตัวถัง ${asLoose(f).vin}`) ||
         "รถคันที่เลือก";
       setRangeLabel(`ประวัติแจ้งซ่อม • ${label}`);
       return;
@@ -329,7 +348,10 @@ export default function ReportPage() {
   /* ---------- Render ---------- */
   return (
     <div className="min-h-screen bg-gray-900 text-white relative">
-      <NavBar onOpenMenu={() => setDrawerOpen(true)} subtitle={<>{titleDate}</>} />
+      <NavBar
+        onOpenMenu={() => setDrawerOpen(true)}
+        subtitle={<>{titleDate}</>}
+      />
 
       <FilterDrawer
         open={drawerOpen}
@@ -341,7 +363,12 @@ export default function ReportPage() {
       {err && <p className="text-red-300 text-center mt-3">{err}</p>}
 
       <div className="px-4 mt-3">
-        <SearchBar value={q} onChange={setQ} count={filtered.length} loading={loading} />
+        <SearchBar
+          value={q}
+          onChange={setQ}
+          count={filtered.length}
+          loading={loading}
+        />
       </div>
 
       {loading ? (
@@ -376,7 +403,7 @@ export default function ReportPage() {
         }}
       />
 
-      <LoadingOverlay show={loading} label="กำลังโหลดข้อมูลรวม..." />
+      <LoadingOverlay show={loading} label="กำลังโหลดข้อมูล..." />
     </div>
   );
 }
