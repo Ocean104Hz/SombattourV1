@@ -132,7 +132,6 @@ export default function FilterDrawer({
   const [techList, setTechList] = useState<string[]>([]);
   const [techKeyword, setTechKeyword] = useState("");
 
-  // <<— กำหนด helper หลังประกาศ state เสมอ
   const openTechModal = () => {
     setTechKeyword("");
     setTechOpen(true);
@@ -145,22 +144,39 @@ export default function FilterDrawer({
       try {
         setTechErr(null);
         setTechLoading(true);
+
         const url = `${TECHNICIAN_API}?_=${Date.now()}`;
         const res = await fetch(url);
         const text = await res.text();
-        if (!res.ok)
-          throw new Error(`HTTP ${res.status}: ${text.slice(0, 160)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 160)}`);
         const json = JSON.parse(text);
+
         const rows = coerceArray((json as any).rows ?? (json as any).data ?? json);
+
+        // ✅ เรียงตาม v_sort ถ้ามี (fallback sort_order/sort) จากนั้น fallback ตามชื่อ
+        rows.sort((a: any, b: any) => {
+          const av = parseInt(a.v_sort || a.sort_order || a.sort || "0", 10);
+          const bv = parseInt(b.v_sort || b.sort_order || b.sort || "0", 10);
+          if (av !== bv) return av - bv;
+          const an = String(
+            a.name ?? a.t_name ?? a.tech_name ?? a.technician ?? ""
+          );
+          const bn = String(
+            b.name ?? b.t_name ?? b.tech_name ?? b.technician ?? ""
+          );
+          return an.localeCompare(bn, "th");
+        });
+
         const names = rows
           .map(
             (r: any) => r.name ?? r.t_name ?? r.tech_name ?? r.technician ?? ""
           )
           .map((s: any) => String(s || "").trim())
           .filter(Boolean);
-        const uniq = Array.from(new Set(names)).sort((a, b) =>
-          a.localeCompare(b, "th")
-        );
+
+        // ✅ ไม่ต้อง .sort อีก — คงลำดับตาม v_sort
+        const uniq = Array.from(new Set(names));
+
         if (!cancelled) setTechList(uniq);
       } catch (e: any) {
         if (!cancelled) setTechErr(e?.message || "โหลดรายชื่อช่างล้มเหลว");
@@ -204,11 +220,7 @@ export default function FilterDrawer({
       className="w-full px-3 py-2 rounded-lg bg-slate-100 cursor-pointer select-none"
       title="คลิกเพื่อเลือกจากรายการรถ"
     >
-      {value?.trim() ? (
-        value
-      ) : (
-        <span className="text-gray-400">คลิกเพื่อเลือก</span>
-      )}
+      {value?.trim() ? value : <span className="text-gray-400">คลิกเพื่อเลือก</span>}
     </div>
   );
 
@@ -227,9 +239,7 @@ export default function FilterDrawer({
     <>
       <div
         className={`fixed inset-0 bg-black/50 transition-opacity ${
-          open
-            ? "opacity-100 pointer-events-auto"
-            : "opacity-0 pointer-events-none"
+          open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
         onClick={onClose}
       />
@@ -241,10 +251,7 @@ export default function FilterDrawer({
         <div className="h-full overflow-y-auto p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-2xl font-extrabold">เมนู</h3>
-            <button
-              onClick={onClose}
-              className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200"
-            >
+            <button onClick={onClose} className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200">
               <FiX />
             </button>
           </div>
@@ -275,8 +282,7 @@ export default function FilterDrawer({
               className="w-full px-3 py-2 rounded-lg bg-slate-100"
             />
             <p className="text-xs text-gray-500 mt-1">
-              เลือก 1 หรือ 2 ช่องก็ได้ (เว้นว่างช่องใดช่องหนึ่ง
-              ระบบจะใช้วันเดียวกัน)
+              เลือก 1 หรือ 2 ช่องก็ได้ (เว้นว่างช่องใดช่องหนึ่ง ระบบจะใช้วันเดียวกัน)
             </p>
           </Accordion>
 
@@ -331,22 +337,13 @@ export default function FilterDrawer({
             }}
           >
             <Label>หมายเลขรถ / ชื่อรถ</Label>
-            <ReadonlyBox
-              value={carName}
-              onClick={() => setVehicleModalOpen(true)}
-            />
+            <ReadonlyBox value={carName} onClick={() => setVehicleModalOpen(true)} />
 
             <Label className="mt-3">เลขทะเบียน</Label>
-            <ReadonlyBox
-              value={plate}
-              onClick={() => setVehicleModalOpen(true)}
-            />
+            <ReadonlyBox value={plate} onClick={() => setVehicleModalOpen(true)} />
 
             <Label className="mt-3">เลขตัวถัง</Label>
-            <ReadonlyBox
-              value={vin}
-              onClick={() => setVehicleModalOpen(true)}
-            />
+            <ReadonlyBox value={vin} onClick={() => setVehicleModalOpen(true)} />
 
             <div className="pt-2">
               <button
@@ -418,9 +415,7 @@ export default function FilterDrawer({
                 />
               </div>
 
-              {techErr && (
-                <div className="text-red-500 text-sm mb-2">{techErr}</div>
-              )}
+              {techErr && <div className="text-red-500 text-sm mb-2">{techErr}</div>}
 
               {techLoading ? (
                 <div className="text-slate-600">กำลังโหลดรายชื่อช่าง…</div>
@@ -469,21 +464,13 @@ function Accordion({
       <button
         onClick={onClick}
         className={`w-full flex items-center justify-between border-b pb-2 ${
-          active
-            ? "text-blue-700 border-blue-500"
-            : "text-gray-800 border-gray-200"
+          active ? "text-blue-700 border-blue-500" : "text-gray-800 border-gray-200"
         }`}
       >
-        <span className={`font-semibold ${active ? "text-blue-700" : ""}`}>
-          {title}
-        </span>
-        <FiChevronDown
-          className={`transition-transform ${open ? "rotate-180" : ""}`}
-        />
+        <span className={`font-semibold ${active ? "text-blue-700" : ""}`}>{title}</span>
+        <FiChevronDown className={`transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      <div className={`grid gap-2 pt-3 ${open ? "block" : "hidden"}`}>
-        {children}
-      </div>
+      <div className={`grid gap-2 pt-3 ${open ? "block" : "hidden"}`}>{children}</div>
     </div>
   );
 }
@@ -494,7 +481,5 @@ function Label({
   children: React.ReactNode;
   className?: string;
 }) {
-  return (
-    <label className={`block text-sm mb-1 ${className}`}>{children}</label>
-  );
+  return <label className={`block text-sm mb-1 ${className}`}>{children}</label>;
 }
