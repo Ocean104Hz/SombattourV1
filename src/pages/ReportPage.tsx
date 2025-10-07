@@ -398,6 +398,7 @@ export default function ReportPage() {
         row={selected}
         parts={partsForSelected}
         expenses={expsForSelected}
+        reportFallback={selected?.r_perform_rep ?? ""}
         onClose={() => {
           setSelected(null);
         }}

@@ -69,9 +69,6 @@ export default function SummaryPanel({ row, order }: Props) {
   /* 6) รายการซ่อม : */
   const lineRepair = fmt(row.r_repair_list) || " ";
 
-  /* 7) default รายงานการปฏิบัติงาน */
-  const workReportDefault = fmt(row.r_work_report);
-
   return (
     <>
       <h2 className="text-2xl font-extrabold mb-4">สรุปงาน</h2>
@@ -85,22 +82,6 @@ export default function SummaryPanel({ row, order }: Props) {
         <Row label="ผู้ประกอบการ" value={lineContractor} />
         <Row label="รายการซ่อม" value={lineRepair} multiline />
       </div>
-
-      <div className="mt-6">
-        <p className="font-semibold mb-2">รายงานการปฏิบัติงาน</p>
-        <div
-          className="w-full min-h-[10rem] rounded-xl bg-blue-50/60 text-sky-600 font-bold p-4 text-[14px] whitespace-pre-wrap break-words"
-          // ถ้าไม่มีค่าจะโชว์ "-"
-        >
-          {workReportDefault?.trim() ? workReportDefault : "-"}
-        </div>
-      </div>
-
-      {/* <div className="mt-4 flex gap-3">
-        <button className="ml-auto px-5 py-2 rounded-xl text-white bg-gradient-to-r from-sky-500 to-blue-500 hover:opacity-90">
-          ออก
-        </button>
-      </div> */}
     </>
   );
 }
@@ -122,7 +103,6 @@ function Row({
         className={
           multiline
             ? "whitespace-pre-wrap break-words"
-            // มือถือ + iPad: ตัดบรรทัดได้ / เดสก์ท็อป: บังคับบรรทัดเดียวและตัด ...
             : "whitespace-normal break-words lg:whitespace-nowrap lg:overflow-hidden lg:text-ellipsis"
         }
         title={value}
@@ -132,5 +112,3 @@ function Row({
     </div>
   );
 }
-
-

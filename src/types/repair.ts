@@ -39,6 +39,8 @@ export type RepairRow = {
   // รายงานปฏิบัติงาน (ถ้ามีเก็บไว้ใน DB)
   r_work_report?: string;
 
+  r_perform_rep?: string;
+
   // สถานะปิดงาน
   r_close?: "0" | "1" | number; // 0 = เปิดงาน, 1 = ปิดงาน (บางฐานเป็นตัวเลข/สตริง)
 
