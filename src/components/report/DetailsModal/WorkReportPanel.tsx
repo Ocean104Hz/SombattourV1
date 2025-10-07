@@ -68,8 +68,8 @@ export default function WorkReportPanel({ items = [], report }: Props) {
           ))}
         </div>
       ) : (
-        <div className="w-full min-h-[10rem] rounded-xl bg-blue-100/60 text-sky-600 font-bold p-4 text-[14px] whitespace-pre-wrap break-words">
-          {textFallback || "-"}
+        <div className="w-full min-h-[8rem]  text-sky-600 font-bold p-4 text-[14px] whitespace-pre-wrap break-words">
+          {textFallback || ""}
         </div>
       )}
     </div>
