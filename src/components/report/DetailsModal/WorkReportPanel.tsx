@@ -44,7 +44,7 @@ export default function WorkReportPanel({ items = [], report }: Props) {
 
   return (
     <div className="mt-6">
-      <p className="font-semibold text-lg mb-3">1. รายงานการปฏิบัติงาน</p>
+      <p className="font-semibold text-lg">1. รายงานการปฏิบัติงาน</p>
 
       {hasItems ? (
         <div className="space-y-3">
@@ -68,7 +68,7 @@ export default function WorkReportPanel({ items = [], report }: Props) {
           ))}
         </div>
       ) : (
-        <div className="w-full min-h-[8rem]  text-sky-600 font-bold p-4 text-[14px] whitespace-pre-wrap break-words">
+        <div className="w-full min-h-auto  text-sky-600 font-bold p-4 text-[14px] whitespace-pre-wrap break-words">
           {textFallback || ""}
         </div>
       )}

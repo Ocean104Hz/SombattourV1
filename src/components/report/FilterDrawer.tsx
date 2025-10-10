@@ -54,11 +54,13 @@ export default function FilterDrawer({
   initial,
   onClose,
   onSubmit,
+  loading,
 }: {
   open: boolean;
   initial: DrawerFilters;
   onClose: () => void;
-  onSubmit: (f: DrawerFilters) => void;
+  onSubmit: (f: DrawerFilters) => Promise<void> | void;
+  loading?: boolean;
 }) {
   const [active, setActive] = useState<DrawerFilters["mode"]>(initial.mode);
 
@@ -153,7 +155,6 @@ export default function FilterDrawer({
 
         const rows = coerceArray((json as any).rows ?? (json as any).data ?? json);
 
-        // ✅ เรียงตาม v_sort ถ้ามี (fallback sort_order/sort) จากนั้น fallback ตามชื่อ
         rows.sort((a: any, b: any) => {
           const av = parseInt(a.v_sort || a.sort_order || a.sort || "0", 10);
           const bv = parseInt(b.v_sort || b.sort_order || b.sort || "0", 10);
@@ -174,7 +175,6 @@ export default function FilterDrawer({
           .map((s: any) => String(s || "").trim())
           .filter(Boolean);
 
-        // ✅ ไม่ต้อง .sort อีก — คงลำดับตาม v_sort
         const uniq = Array.from(new Set(names));
 
         if (!cancelled) setTechList(uniq);
@@ -195,7 +195,7 @@ export default function FilterDrawer({
     return techList.filter((n) => n.toLowerCase().includes(k));
   }, [techKeyword, techList]);
 
-  const submit = () => {
+  const submit = async () => {
     if (active === "custom") {
       const _from = from || to || todayStr();
       const _to = to || from || _from;
@@ -305,7 +305,6 @@ export default function FilterDrawer({
             />
 
             <Label className="mt-3">ช่างผู้รับผิดชอบ</Label>
-            {/* คลิก/โฟกัสเพื่อเด้ง modal รายชื่อช่าง */}
             <input
               readOnly
               onClick={openTechModal}
@@ -362,13 +361,20 @@ export default function FilterDrawer({
 
           <div className="pt-4">
             <button
-              onClick={() => {
-                submit();
+              disabled={!!loading}
+              onClick={async () => {
+                if (loading) return;
+                await submit();
                 onClose();
               }}
-              className="w-full py-2 rounded-xl text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-90 flex items-center justify-center gap-2"
+              className={`w-full py-2 rounded-xl text-white flex items-center justify-center gap-2 ${
+                loading
+                  ? "bg-slate-400 cursor-not-allowed"
+                  : "bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-90"
+              }`}
+              title={loading ? "กำลังค้นหา…" : "ค้นหา"}
             >
-              <FiSearch /> ค้นหา
+              <FiSearch /> {loading ? "กำลังค้นหา…" : "ค้นหา"}
             </button>
           </div>
         </div>
@@ -390,18 +396,12 @@ export default function FilterDrawer({
       {/* มอดอลรายชื่อช่าง */}
       {techOpen && (
         <>
-          <div
-            className="fixed inset-0 bg-black/50 z-[1300]"
-            onClick={() => setTechOpen(false)}
-          />
+          <div className="fixed inset-0 bg-black/50 z-[1300]" onClick={() => setTechOpen(false)} />
           <div className="fixed inset-0 z-[1310] flex items-center justify-center p-4">
             <div className="w-full max-w-4xl bg-gray-800 text-white rounded-2xl p-4 flex flex-col">
               <div className="flex items-center justify-between mb-2">
                 <div className="font-bold text-lg">ผู้ซ่อม</div>
-                <button
-                  className="p-2 rounded-xl bg-red-700 hover:bg-red-60"
-                  onClick={() => setTechOpen(false)}
-                >
+                <button className="p-2 rounded-xl bg-red-700 hover:bg-red-60" onClick={() => setTechOpen(false)}>
                   <FiX size={18} />
                 </button>
               </div>
@@ -418,7 +418,7 @@ export default function FilterDrawer({
               {techErr && <div className="text-red-500 text-sm mb-2">{techErr}</div>}
 
               {techLoading ? (
-                <div className="text-slate-600">กำลังโหลดรายชื่อช่าง…</div>
+                <div className="text-slate-300">กำลังโหลดรายชื่อช่าง…</div>
               ) : (
                 <div className="flex-1 overflow-auto">
                   {filteredTech.map((name) => (
@@ -433,9 +433,7 @@ export default function FilterDrawer({
                       {name}
                     </button>
                   ))}
-                  {filteredTech.length === 0 && (
-                    <div className="text-slate-600">ไม่พบรายการ</div>
-                  )}
+                  {filteredTech.length === 0 && <div className="text-slate-400">ไม่พบรายการ</div>}
                 </div>
               )}
             </div>

@@ -1,9 +1,9 @@
 // src/pages/ReportPage.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RepairRow, PartRow, ExpenseRow } from "@/types/repair";
 import { parseDate, toDateTime, isSameDay } from "@/utils/datetime";
 import SearchBar from "@/components/report/SearchBar";
-import type { DrawerFilters } from "@/components/report/FilterDrawer";
+import type { DrawerFilters } from "@/components/report/FilterDrawer"; // ✅ ใช้ชื่อ DrawerFilters ตรงๆ
 import FilterDrawer from "@/components/report/FilterDrawer";
 import RepairCard from "@/components/report/RepairCard";
 import DetailsModal from "@/components/report/DetailsModal/DetailsModal";
@@ -11,35 +11,51 @@ import LoadingOverlay from "@/components/common/LoadingOverlay";
 import SkeletonCards from "@/components/report/SkeletonCards";
 import NavBar from "@/layouts/NavBar";
 
-/* ================== Endpoints (แบบ B: URL เต็มจาก .env) ================== */
+/* ================== Endpoints ================== */
 const EXPORT_ALL_API = (
   ((import.meta as any).env?.VITE_EXPORT_ALL as string) || ""
 ).trim();
-// (หน้าอื่น ๆ ถ้าจะใช้ก็อ่านตรง ๆ ได้ เช่น)
-// const PARTS_DAY_API    = (((import.meta as any).env?.VITE_PARTS_DAY as string) || "").trim();
-// const EXPENSES_DAY_API = (((import.meta as any).env?.VITE_EXPENSES_DAY as string) || "").trim();
 
 /* ================== Settings ================== */
-const DEFAULT_PAGE_SIZE = 5000;
+const DEFAULT_PAGE_SIZE = 5000 as const;
 const TABLES = ["repair", "used_parts", "other_cost"] as const;
 
-/* ================== Safe fetch JSON (ไม่มี token) ================== */
-async function fetchJSON(url: string) {
-  const res = await fetch(url, { credentials: "omit" });
-  const ct = res.headers.get("content-type") || "";
-  const text = await res.text();
+/* ================== Safe fetch JSON (รองรับ external AbortSignal) ================== */
+async function fetchJSON(url: string, init: RequestInit = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
 
-  if (!res.ok)
-    throw new Error(`HTTP ${res.status} @ ${url}\n${text.slice(0, 200)}`);
-  if (!ct.includes("application/json")) {
-    throw new Error(`Not JSON from ${url}\nPreview: ${text.slice(0, 200)}`);
+  const extSignal = init.signal;
+  if (extSignal) {
+    if (extSignal.aborted) ctrl.abort();
+    else extSignal.addEventListener("abort", () => ctrl.abort(), { once: true });
   }
+
   try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(
-      `JSON parse error from ${url}\nPreview: ${text.slice(0, 200)}`
-    );
+    const res = await fetch(url, { credentials: "omit", ...init, signal: ctrl.signal });
+    const ct = res.headers.get("content-type") || "";
+    const text = await res.text();
+
+    if (!res.ok) {
+      try {
+        const j = JSON.parse(text);
+        const msg = j?.message || j?.error || JSON.stringify(j).slice(0, 200);
+        throw new Error(`HTTP ${res.status} @ ${url}\n${msg}`);
+      } catch {
+        throw new Error(`HTTP ${res.status} @ ${url}\n${text.slice(0, 300)}`);
+      }
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (/\bjson\b/i.test(ct)) {
+        throw new Error(`JSON parse error from ${url}\nPreview: ${text.slice(0, 300)}`);
+      }
+      throw new Error(`Not JSON from ${url}\nContent-Type: ${ct}\nPreview: ${text.slice(0, 300)}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -53,8 +69,6 @@ function fmtDate(d: Date) {
 function clean(v: any) {
   return String(v ?? "").trim();
 }
-
-// รองรับรูป response ที่ต่างกัน
 function coerceRows(raw: any): any[] {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
@@ -74,7 +88,7 @@ function getTableRows(json: any, table: string): any[] {
   return [];
 }
 
-/* ================== DrawerFilters แบบหลวม (เพื่ออ่าน date/technician ฯลฯ) ================== */
+/* ================== DrawerFilters แบบหลวม ================== */
 type FiltersLoose = DrawerFilters & {
   date?: string;
   technician?: string;
@@ -86,12 +100,23 @@ type FiltersLoose = DrawerFilters & {
 };
 const asLoose = (f: DrawerFilters) => f as FiltersLoose;
 
-/* ================== Pending helpers ================== */
+/* ================== Pending helpers (robust) ================== */
 const ZERO_DATES = new Set(["", "0000-00-00", "0000-00-00 00:00:00"]);
-function isPending(row: any) {
-  const rawClose = String(row.r_dt_close ?? row.r_close_dt ?? "").trim();
-  const notClosedByDate = ZERO_DATES.has(rawClose);
-  const notClosedByFlag = String(row.r_close ?? "").trim() === "0";
+type MaybeCloseRow = Partial<{
+  r_dt_close: string | null;
+  r_close_dt: string | null;
+  r_close: string | number | null;
+}> & Record<string, unknown>;
+
+function isZeroLikeDate(s?: unknown) {
+  const v = String(s ?? "").trim();
+  return !v || ZERO_DATES.has(v);
+}
+function isPending(row: MaybeCloseRow) {
+  const rawClose = (row.r_dt_close ?? row.r_close_dt ?? "") as string | null | undefined;
+  const notClosedByDate = isZeroLikeDate(rawClose);
+  const closeFlag = String(row.r_close ?? "").trim();
+  const notClosedByFlag = closeFlag === "" || closeFlag === "0" || closeFlag === "false";
   return notClosedByDate || notClosedByFlag;
 }
 
@@ -118,6 +143,59 @@ function mapExpenseFromDB(x: any): ExpenseRow {
   };
 }
 
+/* ================== ตัวช่วยโหลดแบบหลายหน้า (รองรับ AbortSignal) ================== */
+async function fetchRepairAllPages(params: {
+  baseUrl: string;
+  from?: string | null;
+  to?: string | null;
+  pageSize?: number;
+  orderBy?: string;
+  order?: "asc" | "desc";
+  signal?: AbortSignal;
+}) {
+  const {
+    baseUrl,
+    from = null,
+    to = null,
+    pageSize = DEFAULT_PAGE_SIZE,
+    orderBy,
+    order = "desc",
+    signal,
+  } = params;
+
+  const all: any[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const query = new URLSearchParams();
+    query.set("tables", "repair");
+    query.set("pageSize", String(pageSize));
+    if (from) query.set("from", from);
+    if (to) query.set("to", to);
+    if (orderBy || order) {
+      query.set("orderBy", JSON.stringify({ repair: orderBy || "r_id" }));
+      query.set("order", JSON.stringify({ repair: order }));
+    }
+    query.set("page", JSON.stringify({ repair: page }));
+
+    const url = `${baseUrl}?${query.toString()}`;
+    const json = await fetchJSON(url, { signal });
+    const box = json?.tables?.repair;
+    const rows = coerceRows(box?.rows);
+    const meta = box?.meta || {};
+    const tp = Number(meta?.totalPages || 1);
+
+    all.push(...rows);
+    totalPages = isFinite(tp) && tp >= 1 ? tp : 1;
+    page += 1;
+
+    if (page > 2000) break; // safety cap
+  }
+
+  return all as RepairRow[];
+}
+
 /* ====================================================================== */
 
 export default function ReportPage() {
@@ -132,69 +210,209 @@ export default function ReportPage() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // ✅ เริ่มต้นเป็น "รายวัน" + วันนี้
+  // เริ่มต้น "รายวัน" + วันนี้
   const [filters, setFilters] = useState<DrawerFilters>(
     asLoose({ mode: "daily", date: todayStr })
   );
 
+  // คำค้นหา (debounce)
   const [q, setQ] = useState("");
+  const [qRaw, setQRaw] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQ(qRaw), 250);
+    return () => clearTimeout(t);
+  }, [qRaw]);
 
-  // ใช้เฉพาะโหมดที่ไม่ใช่ daily
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
-
-  // โมดอลรายละเอียด
   const [selected, setSelected] = useState<RepairRow | null>(null);
 
-  /* ---------- ดึงทุกตารางทีเดียว ---------- */
-  async function loadAllOnce() {
+  // ควบคุมคำขอ, แคช และป้องกันกดซ้ำ
+  const reqCtlRef = useRef<AbortController | null>(null);
+  const lastKeyRef = useRef<string>("");
+  const cacheRef = useRef<
+    Map<
+      string,
+      { items: RepairRow[]; parts: any[]; exps: any[]; rangeLabel: string | null }
+    >
+  >(new Map());
+
+  function keyOf(f: FiltersLoose) {
+    const norm = JSON.stringify({
+      ...f,
+      date: f.date ?? null,
+      from: f.from ?? null,
+      to: f.to ?? null,
+      technician: f.technician ?? null,
+      carName: f.carName ?? null,
+      plate: f.plate ?? null,
+      vin: f.vin ?? null,
+    });
+    return `${f.mode}:${norm}`;
+  }
+
+  /* ---------- โหลดเริ่มต้น (รายวัน) ---------- */
+  useEffect(() => {
+    void loadByFilters(asLoose({ mode: "daily", date: todayStr }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ---------- โหลดตามตัวกรอง (ยกเลิกคำขอเก่า + แคช + กันกดซ้ำ) ---------- */
+  async function loadByFilters(f: FiltersLoose, { useCache = true }: { useCache?: boolean } = {}) {
     if (!EXPORT_ALL_API) {
       setErr("ไม่ได้ตั้งค่า VITE_EXPORT_ALL");
       return;
     }
-    setLoading(true);
+
+    const key = keyOf(f);
+
+    if (loading && key === lastKeyRef.current) {
+      return; // กันกดซ้ำ key เดิมระหว่างโหลด
+    }
+
     setErr(null);
+    setLoading(true);
+
+    // คายจากแคชทันทีเพื่อความไว (ถ้ามี)
+    if (useCache && cacheRef.current.has(key)) {
+      const c = cacheRef.current.get(key)!;
+      setItems(c.items);
+      setAllParts(c.parts);
+      setAllExps(c.exps);
+      setRangeLabel(c.rangeLabel);
+    }
+
+    // ยกเลิกคำขอเก่า แล้วตั้งคำขอใหม่
+    reqCtlRef.current?.abort();
+    const ctl = new AbortController();
+    reqCtlRef.current = ctl;
+    lastKeyRef.current = key;
+
     try {
+      if (f.mode === "daily") {
+        const d = f.date || todayStr;
+        const query = new URLSearchParams();
+        query.set("tables", TABLES.join(","));
+        query.set("pageSize", String(DEFAULT_PAGE_SIZE));
+        query.set("from", d);
+        query.set("to", d);
+        query.set("order", JSON.stringify({ repair: "desc", used_parts: "desc", other_cost: "desc" }));
+
+        const url = `${EXPORT_ALL_API}?${query.toString()}`;
+        const json = await fetchJSON(url, { signal: ctl.signal });
+
+        const items = getTableRows(json, "repair") as RepairRow[];
+        const parts = getTableRows(json, "used_parts");
+        const exps = getTableRows(json, "other_cost");
+        setItems(items);
+        setAllParts(parts);
+        setAllExps(exps);
+        setRangeLabel(null);
+
+        cacheRef.current.set(key, { items, parts, exps, rangeLabel: null });
+        return;
+      }
+
+      if (f.mode === "custom") {
+        const from = f.from || f.to || todayStr;
+        const to = f.to || f.from || from;
+
+        const repairRows = await fetchRepairAllPages({
+          baseUrl: EXPORT_ALL_API,
+          from,
+          to,
+          pageSize: DEFAULT_PAGE_SIZE,
+          orderBy: "r_id",
+          order: "desc",
+          signal: ctl.signal,
+        });
+
+        const label = `${new Date(`${from}T00:00:00`).toLocaleDateString("th-TH")} – ${new Date(`${to}T00:00:00`).toLocaleDateString("th-TH")}`;
+
+        setItems(repairRows);
+        setAllParts([]);
+        setAllExps([]);
+        setRangeLabel(label);
+
+        cacheRef.current.set(key, { items: repairRows, parts: [], exps: [], rangeLabel: label });
+        return;
+      }
+
+      if (f.mode === "history") {
+        const repairRows = await fetchRepairAllPages({
+          baseUrl: EXPORT_ALL_API,
+          pageSize: DEFAULT_PAGE_SIZE,
+          orderBy: "r_id",
+          order: "desc",
+          signal: ctl.signal,
+        });
+
+        const label =
+          (f.plate && `ประวัติแจ้งซ่อม • ป้ายทะเบียน ${f.plate}`) ||
+          (f.carName && `ประวัติแจ้งซ่อม • หมายเลขรถ ${f.carName}`) ||
+          (f.vin && `ประวัติแจ้งซ่อม • เลขตัวถัง ${f.vin}`) ||
+          "ประวัติแจ้งซ่อม • รถคันที่เลือก";
+
+        setItems(repairRows);
+        setAllParts([]);
+        setAllExps([]);
+        setRangeLabel(label);
+
+        cacheRef.current.set(key, { items: repairRows, parts: [], exps: [], rangeLabel: label });
+        return;
+      }
+
+      if (f.mode === "pendingAll") {
+        const repairRows = await fetchRepairAllPages({
+          baseUrl: EXPORT_ALL_API,
+          pageSize: DEFAULT_PAGE_SIZE,
+          orderBy: "r_id",
+          order: "desc",
+          signal: ctl.signal,
+        });
+        const label = "งานค้างทั้งหมด (กรองจากข้อมูลรวม)";
+
+        setItems(repairRows);
+        setAllParts([]);
+        setAllExps([]);
+        setRangeLabel(label);
+
+        cacheRef.current.set(key, { items: repairRows, parts: [], exps: [], rangeLabel: label });
+        return;
+      }
+
+      // fallback
       const query = new URLSearchParams();
       query.set("tables", TABLES.join(","));
       query.set("pageSize", String(DEFAULT_PAGE_SIZE));
-      query.set(
-        "order",
-        JSON.stringify({
-          repair: "desc",
-          used_parts: "desc",
-          other_cost: "desc",
-        })
-      );
-
+      query.set("order", JSON.stringify({ repair: "desc", used_parts: "desc", other_cost: "desc" }));
       const url = `${EXPORT_ALL_API}?${query.toString()}`;
-      const json = await fetchJSON(url);
+      const json = await fetchJSON(url, { signal: ctl.signal });
 
-      setItems(getTableRows(json, "repair") as RepairRow[]);
-      setAllParts(getTableRows(json, "used_parts"));
-      setAllExps(getTableRows(json, "other_cost"));
+      const items = getTableRows(json, "repair") as RepairRow[];
+      const parts = getTableRows(json, "used_parts");
+      const exps = getTableRows(json, "other_cost");
+      setItems(items);
+      setAllParts(parts);
+      setAllExps(exps);
+      setRangeLabel(null);
+      cacheRef.current.set(key, { items, parts, exps, rangeLabel: null });
 
-      setRangeLabel(null); // โหมดรายวันเป็นค่าเริ่มต้น
     } catch (e: any) {
+      if (e?.name === "AbortError") return; // ถูกยกเลิก
       setItems([]);
       setAllParts([]);
       setAllExps([]);
-      setRangeLabel(null);
-      setErr(e?.message || "โหลดข้อมูลรวมล้มเหลว");
+      setErr(e?.message || "โหลดข้อมูลล้มเหลว");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    loadAllOnce();
-  }, []);
-
-  /* ---------- กรองฝั่ง client ---------- */
+  /* ---------- กรองฝั่ง client (หลังดึงครบแล้ว) ---------- */
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
 
     return items.filter((row) => {
-      // keyword
       if (key) {
         const hay = [
           row.r_job_num,
@@ -211,7 +429,6 @@ export default function ReportPage() {
         if (!hay.includes(key)) return false;
       }
 
-      // รายวัน
       if (filters.mode === "daily") {
         const dStr = asLoose(filters).date;
         if (dStr) {
@@ -228,10 +445,8 @@ export default function ReportPage() {
         return true;
       }
 
-      // งานค้าง
       if (filters.mode === "pendingAll") return isPending(row);
 
-      // ประวัติรถ
       if (filters.mode === "history") {
         const car = (asLoose(filters).carName ?? "").trim().toLowerCase();
         const plate = (asLoose(filters).plate ?? "").trim().toLowerCase();
@@ -239,9 +454,7 @@ export default function ReportPage() {
 
         const nameSrc = String(row.r_v_name || "").toLowerCase();
         const plateSrc = String(row.r_v_plate || "").toLowerCase();
-        const vinSrc = String(
-          row.r_v_chassis || row.r_job_num || ""
-        ).toLowerCase();
+        const vinSrc = String(row.r_v_chassis || row.r_job_num || "").toLowerCase();
 
         if (car && !nameSrc.includes(car)) return false;
         if (plate && !plateSrc.includes(plate)) return false;
@@ -249,7 +462,6 @@ export default function ReportPage() {
         return true;
       }
 
-      // ช่วงวันที่กำหนดเอง
       if (filters.mode === "custom") {
         const from = asLoose(filters).from || asLoose(filters).to;
         const to = asLoose(filters).to || asLoose(filters).from;
@@ -272,16 +484,15 @@ export default function ReportPage() {
     });
   }, [items, q, filters]);
 
-  /* ---------- Title (รายวันเป็นหลัก) ---------- */
+  /* ---------- Title ---------- */
   const dateLoose = asLoose(filters).date;
   const titleDate = useMemo(() => {
     if (filters.mode === "daily" && dateLoose) {
       const d = new Date(`${dateLoose}T00:00:00`);
-      return `งานประจำวันที่ ${d.toLocaleDateString("th-TH")} • ${
-        filtered.length
-      } รายการ`;
+      const th = isNaN(d.getTime()) ? dateLoose : d.toLocaleDateString("th-TH");
+      return `งานประจำวันที่ ${th} • ${filtered.length} รายการ`;
     }
-    if (rangeLabel) return rangeLabel;
+    if (rangeLabel) return `${rangeLabel} • ${filtered.length} รายการ`;
     return `รวมทั้งหมด (${filtered.length} รายการ)`;
   }, [filters.mode, dateLoose, filtered.length, rangeLabel]);
 
@@ -313,65 +524,29 @@ export default function ReportPage() {
   const handleFilterSubmit = async (f: DrawerFilters) => {
     setErr(null);
     setFilters(f);
-
-    if (f.mode === "custom") {
-      const from = asLoose(f).from || asLoose(f).to || fmtDate(new Date());
-      const to = asLoose(f).to || asLoose(f).from || from;
-      setRangeLabel(
-        `${new Date(`${from}T00:00:00`).toLocaleDateString(
-          "th-TH"
-        )} – ${new Date(`${to}T00:00:00`).toLocaleDateString("th-TH")}`
-      );
-      return;
-    }
-
-    if (f.mode === "daily" && asLoose(f).date) {
-      setRangeLabel(null);
-      return;
-    }
-    if (f.mode === "pendingAll") {
-      setRangeLabel("งานค้างทั้งหมด (กรองจากข้อมูลรวม)");
-      return;
-    }
-
-    if (f.mode === "history") {
-      const label =
-        (asLoose(f).plate && `ป้ายทะเบียน ${asLoose(f).plate}`) ||
-        (asLoose(f).carName && `หมายเลขรถ ${asLoose(f).carName}`) ||
-        (asLoose(f).vin && `เลขตัวถัง ${asLoose(f).vin}`) ||
-        "รถคันที่เลือก";
-      setRangeLabel(`ประวัติแจ้งซ่อม • ${label}`);
-      return;
-    }
+    await loadByFilters(asLoose(f));
   };
 
   /* ---------- Render ---------- */
   return (
     <div className="min-h-screen bg-gray-900 text-white relative">
-      <NavBar
-        onOpenMenu={() => setDrawerOpen(true)}
-        subtitle={<>{titleDate}</>}
-      />
+      <NavBar onOpenMenu={() => setDrawerOpen(true)} subtitle={<>{titleDate}</>} />
 
       <FilterDrawer
         open={drawerOpen}
         initial={filters}
         onClose={() => setDrawerOpen(false)}
-        onSubmit={handleFilterSubmit as (f: unknown) => void}
+        onSubmit={handleFilterSubmit}
+        loading={loading}
       />
 
       {err && <p className="text-red-300 text-center mt-3">{err}</p>}
 
       <div className="px-4 mt-3">
-        <SearchBar
-          value={q}
-          onChange={setQ}
-          count={filtered.length}
-          loading={loading}
-        />
+        <SearchBar value={qRaw} onChange={setQRaw} count={filtered.length} loading={loading} />
       </div>
 
-      {loading ? (
+      {loading && !cacheRef.current.has(keyOf(asLoose(filters))) ? (
         <SkeletonCards count={9} />
       ) : (
         <div className="mt-4 px-4 pb-20 flex flex-wrap gap-2">
@@ -384,9 +559,7 @@ export default function ReportPage() {
                 order={idx + 1}
                 row={item}
                 toDateTime={toDateTime}
-                onOpen={() => {
-                  setSelected(item);
-                }}
+                onOpen={() => setSelected(item)}
               />
             ))
           )}
@@ -399,9 +572,7 @@ export default function ReportPage() {
         parts={partsForSelected}
         expenses={expsForSelected}
         reportFallback={selected?.r_perform_rep ?? ""}
-        onClose={() => {
-          setSelected(null);
-        }}
+        onClose={() => setSelected(null)}
       />
 
       <LoadingOverlay show={loading} label="กำลังโหลดข้อมูล..." />

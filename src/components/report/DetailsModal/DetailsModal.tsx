@@ -46,7 +46,6 @@ export default function DetailsModal({
         <div className="p-6 md:p-8 overflow-auto">
           {/* <SummaryPanel row={row} /> */}
           <WorkReportPanel items={performReports || []} report={reportFallback} />
-          <div className="h-6" />
           <PartsTable rows={parts} />
           <div className="h-6" />
           <ExpensesTable rows={expenses} />
