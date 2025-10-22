@@ -1,4 +1,3 @@
-// src/components/report/RepairCard.tsx
 import { FiTool } from "react-icons/fi";
 import type { RepairRow } from "@/types/repair";
 import { fmt } from "@/utils/datetime";
@@ -12,8 +11,6 @@ type Props = {
 
 export default function RepairCard({ order, row, toDateTime, onOpen }: Props) {
   const dt = toDateTime(row.r_dt_rec);
-
-  // โชว์ทะเบียนก่อน ถ้าไม่มีค่อย fallback เป็นชื่อรถ
   const vehicle =
     String(row.r_v_name ?? "").trim() ||
     String(row.r_v_plate ?? "").trim() ||

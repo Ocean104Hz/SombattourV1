@@ -6,7 +6,6 @@ export default function App() {
   return (
     <Router>
       <Routes>
-        {/* หน้าเดียวคือ ReportPage */}
         <Route path="/" element={<ReportPage />} />
       </Routes>
     </Router>

@@ -1,4 +1,4 @@
-// src/components/report/DetailsModal/SummaryPanel.tsx
+
 import type { RepairRow } from "@/types/repair";
 import { fmt } from "@/utils/datetime";
 import { cleanZeroLike, closeTextTH } from "@/utils/repair";
@@ -39,7 +39,7 @@ export default function SummaryPanel({ row, order }: Props) {
 
   /* 2) เปิด-ปิดงาน : <วันเวลาเปิด> - <วันเวลาปิด|Working...>  (ใช้ r_close_dt) */
   const openStr = thDateTime(row.r_dt_rec) || " ";
-  const closeStr = closeTextTH(row); // ใช้กติกา r_close_dt เพียว ๆ
+  const closeStr = closeTextTH(row); 
   const lineOpenClose = `${openStr} - ${closeStr}`;
 
   /* 3) ยานพาหนะ : <ชื่อรถ>  <ทะเบียน>  <เลขตัวถัง> */

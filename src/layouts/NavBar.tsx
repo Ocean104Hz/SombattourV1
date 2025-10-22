@@ -8,8 +8,8 @@ export default function NavBar({
   subtitle,
 }: {
   onOpenMenu: () => void;
-  rightSlot?: React.ReactNode;   // ปุ่ม/คอนโทรลเพิ่มเติมฝั่งขวา (ไม่บังคับ)
-  subtitle?: React.ReactNode;    // บรรทัดย่อยใต้หัวเรื่อง (เช่น วันที่)
+  rightSlot?: React.ReactNode;  
+  subtitle?: React.ReactNode;   
 }) {
   return (
     <header className="sticky top-0 z-[1000] bg-gray-900/80 backdrop-blur supports-[backdrop-filter]:bg-gray-900/60 border-b border-white/10">

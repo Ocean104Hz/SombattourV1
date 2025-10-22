@@ -1,4 +1,3 @@
-// src/components/layouts/MainLayout.tsx
 import { Outlet, Link } from "react-router-dom";
 
 export default function MainLayout() {

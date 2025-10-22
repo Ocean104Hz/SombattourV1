@@ -1,9 +1,8 @@
-// src/pages/ReportPage.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RepairRow, PartRow, ExpenseRow } from "@/types/repair";
 import { parseDate, toDateTime, isSameDay } from "@/utils/datetime";
 import SearchBar from "@/components/report/SearchBar";
-import type { DrawerFilters } from "@/components/report/FilterDrawer"; // ✅ ใช้ชื่อ DrawerFilters ตรงๆ
+import type { DrawerFilters } from "@/components/report/FilterDrawer";
 import FilterDrawer from "@/components/report/FilterDrawer";
 import RepairCard from "@/components/report/RepairCard";
 import DetailsModal from "@/components/report/DetailsModal/DetailsModal";
@@ -143,7 +142,7 @@ function mapExpenseFromDB(x: any): ExpenseRow {
   };
 }
 
-/* ================== ตัวช่วยโหลดแบบหลายหน้า (รองรับ AbortSignal) ================== */
+/* ================== ตัวช่วยโหลดแบบหลายหน้า ================== */
 async function fetchRepairAllPages(params: {
   baseUrl: string;
   from?: string | null;
@@ -253,7 +252,6 @@ export default function ReportPage() {
   /* ---------- โหลดเริ่มต้น (รายวัน) ---------- */
   useEffect(() => {
     void loadByFilters(asLoose({ mode: "daily", date: todayStr }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ---------- โหลดตามตัวกรอง (ยกเลิกคำขอเก่า + แคช + กันกดซ้ำ) ---------- */
@@ -408,7 +406,6 @@ export default function ReportPage() {
     }
   }
 
-  /* ---------- กรองฝั่ง client (หลังดึงครบแล้ว) ---------- */
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
 
@@ -484,7 +481,6 @@ export default function ReportPage() {
     });
   }, [items, q, filters]);
 
-  /* ---------- Title ---------- */
   const dateLoose = asLoose(filters).date;
   const titleDate = useMemo(() => {
     if (filters.mode === "daily" && dateLoose) {
@@ -496,7 +492,6 @@ export default function ReportPage() {
     return `รวมทั้งหมด (${filtered.length} รายการ)`;
   }, [filters.mode, dateLoose, filtered.length, rangeLabel]);
 
-  /* ---------- Rows ในโมดอล ---------- */
   const partsForSelected = useMemo<PartRow[]>(() => {
     if (!selected) return [];
     const id = clean(selected.r_id);
@@ -520,14 +515,12 @@ export default function ReportPage() {
       .map(mapExpenseFromDB);
   }, [selected, allExps]);
 
-  /* ---------- Handler ของ FilterDrawer ---------- */
   const handleFilterSubmit = async (f: DrawerFilters) => {
     setErr(null);
     setFilters(f);
     await loadByFilters(asLoose(f));
   };
 
-  /* ---------- Render ---------- */
   return (
     <div className="min-h-screen bg-gray-900 text-white relative">
       <NavBar onOpenMenu={() => setDrawerOpen(true)} subtitle={<>{titleDate}</>} />

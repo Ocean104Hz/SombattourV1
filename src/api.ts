@@ -1,6 +1,6 @@
-// src/api.ts
+
 const RAW = import.meta.env.VITE_API_BASE || "";
-const API_BASE = RAW.replace(/\/+$/, ""); // ตัด slash ท้าย
+const API_BASE = RAW.replace(/\/+$/, "");
 
 export async function fetchRepairs(params: Record<string, string | number> = {}) {
   const qs = new URLSearchParams();

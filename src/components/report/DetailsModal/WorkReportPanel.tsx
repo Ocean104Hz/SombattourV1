@@ -1,4 +1,3 @@
-// src/components/report/DetailsModal/WorkReportPanel.tsx
 import { useMemo } from "react";
 
 export type PerformItem = {
@@ -9,8 +8,8 @@ export type PerformItem = {
 };
 
 type Props = {
-  items?: PerformItem[];  // จากตาราง r_perform_rep (ถ้ามี)
-  report?: string;        // ฟอลแบ็กจาก repair.r_perform_rep
+  items?: PerformItem[];  
+  report?: string;        
 };
 
 function fmtDateTime(v?: string) {

@@ -1,5 +1,4 @@
 
-/** โครงรายการซ่อมแบบ shimmer ขณะรอโหลด */
 export default function SkeletonCards({ count = 8 }: { count?: number }) {
   return (
     <div className="mt-4 px-4 pb-20 flex flex-wrap gap-2">
